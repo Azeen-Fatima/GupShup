@@ -1,0 +1,7 @@
+<main class="stage">
+  <div class="app-card" role="region" aria-label="Gupshup Application">
+    <app-connection-banner [isReconnecting]="isReconnecting()"></app-connection-banner>
+    <router-outlet></router-outlet>
+    <app-toast></app-toast>
+  </div>
+</main>

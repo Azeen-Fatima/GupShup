@@ -1,0 +1,85 @@
+### Variables
+@baseUrl = http://localhost:3000/api/v1
+@testEmail = user@example.com
+@testPassword = Password123!
+
+### 1. Health Check
+GET {{baseUrl}}/health
+
+### 2. Request Signup OTP
+# @name requestOtp
+POST {{baseUrl}}/auth/signup/code
+Content-Type: application/json
+
+{
+  "email": "{{testEmail}}"
+}
+
+### 3. Verify Signup OTP (use OTP code from email or console in dev)
+# @name verifyOtp
+POST {{baseUrl}}/auth/signup/verify
+Content-Type: application/json
+
+{
+  "email": "{{testEmail}}",
+  "code": "123456"
+}
+
+### 4. Check Username Availability
+GET {{baseUrl}}/auth/signup/username?username=gupshup_user
+
+### 5. Complete Signup
+# @name completeSignup
+POST {{baseUrl}}/auth/signup
+Content-Type: application/json
+
+{
+  "signupToken": "{{verifyOtp.response.body.data.signupToken}}",
+  "name": "Gupshup User",
+  "username": "gupshup_user",
+  "password": "{{testPassword}}"
+}
+
+### 6. Login
+# @name login
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{
+  "identifier": "gupshup_user",
+  "password": "{{testPassword}}"
+}
+
+### Save access token
+@authToken = {{login.response.body.data.accessToken}}
+
+### 7. Get Current User Profile
+GET {{baseUrl}}/users/me
+Authorization: Bearer {{authToken}}
+
+### 8. Update Profile
+PATCH {{baseUrl}}/users/me
+Authorization: Bearer {{authToken}}
+Content-Type: application/json
+
+{
+  "name": "Updated Gupshup User",
+  "bio": "Building real-time web applications",
+  "statusMessage": "Available",
+  "themePreference": "system"
+}
+
+### 9. Search Users
+GET {{baseUrl}}/users/search?q=user
+Authorization: Bearer {{authToken}}
+
+### 10. List Conversations (Includes Notes to Self)
+GET {{baseUrl}}/conversations
+Authorization: Bearer {{authToken}}
+
+### 11. Token Refresh
+POST {{baseUrl}}/auth/refresh
+
+### 12. Logout
+POST {{baseUrl}}/auth/logout
+Authorization: Bearer {{authToken}}

@@ -1,0 +1,72 @@
+/* Design Tokens for Gupshup */
+:root {
+  --bg: #FAF6EF;
+  --card: #FFFFFF;
+  --input: #F3ECE0;
+  --border: #E9E1D3;
+  --ink: #2E2A26;
+  --muted: #7A7168;
+  --amber: #E8A23D;
+  --amber-text: #A96100;
+  --on-amber: #2E2A26; /* Text on amber is always dark charcoal #2E2A26, never white */
+  --teal: #4FA9A0;
+  --danger: #C8503C;
+  --avatar-bg: #F3E3C3;
+  --msgbtn-bg: #FBEFD9;
+  --bubble-rcv: #F1EADF;
+  --bubble-rcv-text: #2E2A26;
+  --hover: rgba(232, 162, 61, 0.08);
+  --shadow: rgba(46, 42, 38, 0.10);
+  --card-shadow: 0 20px 60px rgba(46, 42, 38, 0.12), 0 2px 8px rgba(46, 42, 38, 0.04);
+  --focus-ring: rgba(232, 162, 61, 0.35);
+  --scrim: rgba(46, 42, 38, 0.35);
+  color-scheme: light;
+}
+
+:root[data-theme='white'] {
+  --bg: #FFFFFF;
+  --card: #F7F6F4;
+  --input: #F0EEEA;
+  --border: #E4E1DB;
+  --ink: #211F1C;
+  --muted: #847C72;
+  --avatar-bg: #ECE6DC;
+  --msgbtn-bg: #FBEFD9;
+  --bubble-rcv: #ECE9E3;
+  --bubble-rcv-text: #211F1C;
+  --amber: #E8A23D;
+  --amber-text: #A96100;
+  --on-amber: #2E2A26;
+  --teal: #4FA9A0;
+  --danger: #C8503C;
+  --hover: rgba(232, 162, 61, 0.08);
+  --shadow: rgba(46, 42, 38, 0.08);
+  --card-shadow: 0 20px 50px rgba(0, 0, 0, 0.08), 0 2px 6px rgba(0, 0, 0, 0.03);
+  --focus-ring: rgba(232, 162, 61, 0.35);
+  --scrim: rgba(33, 31, 28, 0.35);
+  color-scheme: light;
+}
+
+:root[data-theme='black'] {
+  --bg: #1E1B18;
+  --card: #282420;
+  --input: #332D27;
+  --border: #3A332C;
+  --ink: #F2EBE0;
+  --muted: #B2A89C;
+  --avatar-bg: #4A4034;
+  --msgbtn-bg: #3A2E18;
+  --amber: #E8A23D;
+  --amber-text: #F0B866;
+  --on-amber: #2E2A26;
+  --bubble-rcv: #352F28;
+  --bubble-rcv-text: #F2EBE0;
+  --teal: #4FA9A0;
+  --danger: #C8503C;
+  --hover: rgba(232, 162, 61, 0.12);
+  --shadow: rgba(0, 0, 0, 0.45);
+  --card-shadow: 0 24px 60px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.3);
+  --focus-ring: rgba(232, 162, 61, 0.45);
+  --scrim: rgba(0, 0, 0, 0.55);
+  color-scheme: dark;
+}
