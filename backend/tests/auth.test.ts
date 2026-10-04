@@ -5,10 +5,14 @@ import { capturedMails, clearCapturedMails } from '../src/utils/mailer';
 import { cleanupTestUsers, createTestUser } from './test.helper';
 import { prisma } from '../src/db/prisma';
 
+import { env } from '../src/config/env';
+
 describe('Auth Module Integration Tests', () => {
   const originalFetch = global.fetch;
+  const originalResendApiKey = env.RESEND_API_KEY;
 
   beforeAll(async () => {
+    env.RESEND_API_KEY = 're_test_mock_auth';
     await cleanupTestUsers();
     clearCapturedMails();
     global.fetch = vi.fn().mockResolvedValue({
@@ -19,7 +23,12 @@ describe('Auth Module Integration Tests', () => {
     });
   });
 
+  beforeEach(() => {
+    env.RESEND_API_KEY = 're_test_mock_auth';
+  });
+
   afterAll(async () => {
+    env.RESEND_API_KEY = originalResendApiKey;
     global.fetch = originalFetch;
     await cleanupTestUsers();
   });
@@ -197,5 +206,27 @@ describe('Auth Module Integration Tests', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
+  });
+
+  it('9. POST /api/v1/auth/login on Google-only account returns GOOGLE_ACCOUNT_ONLY', async () => {
+    const googleUserEmail = `google_only_${Date.now()}@example.com`;
+    await prisma.user.create({
+      data: {
+        email: googleUserEmail,
+        username: `google_user_${Date.now().toString().slice(-5)}`,
+        name: 'Google Only User',
+        googleId: `gid_${Date.now()}`,
+        passwordHash: null,
+      },
+    });
+
+    const res = await request(app)
+      .post('/api/v1/auth/login')
+      .send({ identifier: googleUserEmail, password: 'AnyPassword123!' });
+
+    expect(res.status).toBe(401);
+    expect(res.body.success).toBe(false);
+    expect(res.body.error.code).toBe('GOOGLE_ACCOUNT_ONLY');
+    expect(res.body.error.message).toBe('This account uses Google sign-in. Please use Continue with Google.');
   });
 });

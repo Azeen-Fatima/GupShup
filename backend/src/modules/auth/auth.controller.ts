@@ -188,6 +188,9 @@ export class AuthController {
         sendSuccess(res, {
           needsProfile: true,
           googleToken: result.googleToken,
+          email: result.email,
+          name: result.name,
+          avatarUrl: result.avatarUrl,
         });
       } else {
         res.cookie(REFRESH_COOKIE_NAME, result.refreshToken!, getRefreshTokenCookieOptions());

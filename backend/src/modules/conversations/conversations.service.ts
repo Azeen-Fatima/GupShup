@@ -41,6 +41,7 @@ export class ConversationsService {
                 id: true,
                 username: true,
                 name: true,
+                avatarUrl: true,
               },
             },
             messages: {
@@ -198,6 +199,7 @@ export class ConversationsService {
                 id: true,
                 username: true,
                 name: true,
+                avatarUrl: true,
               },
             },
           },

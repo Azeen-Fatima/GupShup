@@ -15,9 +15,13 @@ initSocketServer(server);
 // Log active email provider at startup
 logActiveEmailProvider();
 
+// Resolve final port (default to 3000, never listen on 0)
+const finalPort = env.PORT > 0 ? env.PORT : 3000;
+
 // Start server
-server.listen(env.PORT, '0.0.0.0', () => {
-  logger.info(`Gupshup backend server running on http://0.0.0.0:${env.PORT}`);
+server.listen(finalPort, '0.0.0.0', () => {
+  logger.info(`Gupshup backend server running on http://0.0.0.0:${finalPort}`);
+  logger.info(`Final listening port: ${finalPort}`);
   logger.info(`Environment: ${env.NODE_ENV}`);
 });
 

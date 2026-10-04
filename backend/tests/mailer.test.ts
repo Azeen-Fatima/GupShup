@@ -27,6 +27,7 @@ describe('Mailer Module Integration & Unit Tests', () => {
     // With no SMTP or Resend, falls back to log_only (or smtp if SMTP_* is set in local .env)
     const fallback = getActiveEmailProvider();
     expect(['smtp', 'log_only']).toContain(fallback);
+    env.RESEND_API_KEY = originalResendApiKey;
   });
 
   it('2. Successfully dispatches email via Resend HTTP API when fetch succeeds', async () => {

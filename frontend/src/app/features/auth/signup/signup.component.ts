@@ -2,7 +2,9 @@ import {
   Component,
   ElementRef,
   QueryList,
+  ViewChild,
   ViewChildren,
+  AfterViewInit,
   inject,
   signal,
   OnDestroy,
@@ -17,6 +19,7 @@ import { SvgIconComponent } from '../../../shared/components/svg-icon/svg-icon.c
 import { AuthService } from '../../../shared/services/auth.service';
 import { UsersService } from '../../../shared/services/users.service';
 import { ToastService } from '../../../shared/services/toast.service';
+import { GoogleAuthService } from '../../../shared/services/google-auth.service';
 
 @Component({
   selector: 'app-signup',
@@ -89,16 +92,19 @@ import { ToastService } from '../../../shared/services/toast.service';
                 <span>or</span>
               </div>
 
-              <button
-                type="button"
-                class="google-btn"
-                (click)="continueWithGoogle()"
-                aria-label="Continue with Google"
-                [disabled]="isLoading()"
-              >
-                <app-svg-icon name="google" [size]="18"></app-svg-icon>
-                <span>Continue with Google</span>
-              </button>
+              <div class="google-btn-wrapper">
+                <button
+                  type="button"
+                  class="google-btn"
+                  (click)="continueWithGoogle()"
+                  aria-label="Continue with Google"
+                  [disabled]="isLoading()"
+                >
+                  <app-svg-icon name="google" [size]="18"></app-svg-icon>
+                  <span>Continue with Google</span>
+                </button>
+                <div #googleBtnRef class="google-gsi-overlay" aria-hidden="true"></div>
+              </div>
             </div>
           }
 
@@ -235,21 +241,23 @@ import { ToastService } from '../../../shared/services/toast.service';
                 }
               </div>
 
-              <div class="field-group">
-                <label for="passwordInput" class="field-label">Password</label>
-                <input
-                  id="passwordInput"
-                  type="password"
-                  formControlName="password"
-                  placeholder="At least 8 characters"
-                  class="auth-input"
-                  [class.invalid]="isInvalid('password')"
-                  autocomplete="new-password"
-                />
-                @if (isInvalid('password')) {
-                  <span class="error-msg">Password must be at least 8 characters</span>
-                }
-              </div>
+              @if (!isGoogleSignup()) {
+                <div class="field-group">
+                  <label for="passwordInput" class="field-label">Password</label>
+                  <input
+                    id="passwordInput"
+                    type="password"
+                    formControlName="password"
+                    placeholder="At least 8 characters"
+                    class="auth-input"
+                    [class.invalid]="isInvalid('password')"
+                    autocomplete="new-password"
+                  />
+                  @if (isInvalid('password')) {
+                    <span class="error-msg">Password must be at least 8 characters</span>
+                  }
+                </div>
+              }
 
               <app-button
                 type="submit"
@@ -472,6 +480,32 @@ import { ToastService } from '../../../shared/services/toast.service';
       }
     }
 
+    .google-btn-wrapper {
+      position: relative;
+      width: 100%;
+      border-radius: 999px;
+      overflow: hidden;
+    }
+
+    .google-gsi-overlay {
+      position: absolute;
+      inset: 0;
+      opacity: 0.0001;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 2;
+      pointer-events: auto;
+
+      ::ng-deep iframe {
+        width: 100% !important;
+        height: 100% !important;
+        transform: scale(1.6);
+        cursor: pointer !important;
+      }
+    }
+
     /* 6-digit OTP row */
     .otp-row {
       display: grid;
@@ -592,16 +626,20 @@ import { ToastService } from '../../../shared/services/toast.service';
     }
   `],
 })
-export class SignupComponent implements OnDestroy {
+export class SignupComponent implements AfterViewInit, OnDestroy {
   private readonly fb = inject(FormBuilder);
   private readonly router = inject(Router);
   private readonly authService = inject(AuthService);
   private readonly usersService = inject(UsersService);
   private readonly toast = inject(ToastService);
+  private readonly googleAuthService = inject(GoogleAuthService);
 
   @ViewChildren('otpInput') otpInputs!: QueryList<ElementRef<HTMLInputElement>>;
+  @ViewChild('googleBtnRef') googleBtnRef?: ElementRef<HTMLDivElement>;
 
   readonly currentStep = signal<number>(1);
+  readonly isGoogleSignup = signal<boolean>(false);
+  readonly googleToken = signal<string | null>(null);
   readonly otpDigits = signal<string[]>(['', '', '', '', '', '']);
   readonly otpError = signal<string>('');
   readonly photoPreview = signal<string | null>(null);
@@ -647,6 +685,28 @@ export class SignupComponent implements OnDestroy {
         const currentClean = raw.replace(/^@/, '').toLowerCase();
         if (currentClean === res.username) {
           this.usernameStatus.set(res.available ? 'available' : 'taken');
+        }
+      });
+
+    const navState = history.state;
+    if (navState?.fromGoogle && navState?.googleToken) {
+      this.setupGoogleProfileStep({
+        googleToken: navState.googleToken,
+        email: navState.email,
+        name: navState.name,
+        avatarUrl: navState.avatarUrl,
+      });
+    }
+  }
+
+  ngAfterViewInit(): void {
+    this.googleAuthService
+      .initialize((credential) => {
+        this.handleGoogleCredential(credential);
+      })
+      .then((success) => {
+        if (success && this.googleBtnRef?.nativeElement) {
+          this.googleAuthService.renderButton(this.googleBtnRef.nativeElement);
         }
       });
   }
@@ -858,7 +918,75 @@ export class SignupComponent implements OnDestroy {
   }
 
   continueWithGoogle(): void {
-    this.toast.info('Google sign-in is available when Google Client ID is configured.');
+    if (this.isLoading()) return;
+    if (this.googleAuthService.isLoaded()) {
+      this.googleAuthService.prompt();
+    } else {
+      this.googleAuthService.loadScript().then((loaded) => {
+        if (loaded) {
+          this.googleAuthService.initialize((credential) => this.handleGoogleCredential(credential));
+          this.googleAuthService.prompt();
+        } else {
+          this.toast.error('Google sign-in could not be loaded. Please check your connection or ad-blocker.');
+        }
+      });
+    }
+  }
+
+  private handleGoogleCredential(credential: string): void {
+    this.isLoading.set(true);
+
+    this.authService.googleAuth(credential).subscribe({
+      next: (res) => {
+        this.isLoading.set(false);
+        if (!res.needsProfile) {
+          this.toast.success('Welcome back!');
+          this.router.navigate(['/chats']);
+        } else {
+          this.setupGoogleProfileStep({
+            googleToken: res.googleToken,
+            email: res.email,
+            name: res.name,
+            avatarUrl: res.avatarUrl,
+          });
+        }
+      },
+      error: (err) => {
+        this.isLoading.set(false);
+        this.toast.error(
+          err?.error?.error?.message || err?.error?.message || 'Google sign-in failed. Please try again.'
+        );
+      },
+    });
+  }
+
+  private setupGoogleProfileStep(data: {
+    googleToken: string;
+    email?: string;
+    name?: string;
+    avatarUrl?: string | null;
+  }): void {
+    this.isGoogleSignup.set(true);
+    this.googleToken.set(data.googleToken);
+    this.currentStep.set(3);
+
+    if (data.name) {
+      this.signupForm.get('name')?.setValue(data.name);
+    }
+    if (data.email) {
+      this.signupForm.get('email')?.setValue(data.email);
+    }
+    if (data.avatarUrl) {
+      this.photoPreview.set(data.avatarUrl);
+    }
+
+    const passCtrl = this.signupForm.get('password');
+    passCtrl?.clearValidators();
+    passCtrl?.updateValueAndValidity();
+
+    this.signupForm.get('username')?.setValue('', { emitEvent: false });
+    this.usernameStatus.set('idle');
+    this.usernameLocalError.set('');
   }
 
   onStepSubmit(): void {
@@ -895,6 +1023,71 @@ export class SignupComponent implements OnDestroy {
 
       const rawUsername = userCtrl!.value.trim();
       const cleanUsername = rawUsername.replace(/^@/, '').toLowerCase();
+
+      if (this.isGoogleSignup()) {
+        const gToken = this.googleToken();
+        if (!gToken) {
+          this.toast.error('Google session expired. Please sign in again.');
+          this.currentStep.set(1);
+          return;
+        }
+
+        this.isLoading.set(true);
+        this.authService
+          .completeGoogleProfile({
+            googleToken: gToken,
+            name: nameCtrl!.value.trim(),
+            username: cleanUsername,
+            avatarUrl: this.photoPreview(),
+          })
+          .subscribe({
+            next: () => {
+              const avatar = this.avatarFile();
+              if (avatar) {
+                this.usersService.uploadAvatar(avatar).subscribe({
+                  next: () => {
+                    this.isLoading.set(false);
+                    this.toast.success('Account created successfully!');
+                    this.router.navigate(['/chats']);
+                  },
+                  error: () => {
+                    this.isLoading.set(false);
+                    this.toast.success('Account created!');
+                    this.router.navigate(['/chats']);
+                  },
+                });
+              } else {
+                this.isLoading.set(false);
+                this.toast.success('Account created successfully!');
+                this.router.navigate(['/chats']);
+              }
+            },
+            error: (err) => {
+              this.isLoading.set(false);
+              const status = err.status;
+              const msg = err?.error?.error?.message || err?.error?.message || '';
+              const code = err?.error?.error?.code || '';
+
+              if (status === 409) {
+                if (code === 'USERNAME_ALREADY_EXISTS' || code === 'USERNAME_TAKEN' || msg.toLowerCase().includes('username')) {
+                  this.usernameStatus.set('taken');
+                  document.getElementById('usernameInput')?.focus();
+                  this.toast.error('Username already taken. Please choose another.');
+                } else {
+                  this.toast.error('An account with this email already exists.');
+                }
+              } else if (status === 400) {
+                this.toast.error(msg || 'Invalid registration details. Please check the fields.');
+              } else if (status >= 500) {
+                this.toast.error('Server error occurred. Please try again later.');
+              } else {
+                this.toast.error(msg || 'Failed to complete registration');
+              }
+            },
+          });
+        return;
+      }
+
       const token = this.signupToken();
 
       if (!token) {

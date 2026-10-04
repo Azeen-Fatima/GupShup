@@ -279,6 +279,7 @@ import { EmptyStateComponent } from '../../../shared/components/empty-state/empt
             [disabled]="chat()?.isIncomingRequest"
             [title]="emojiPickerOpen() ? 'Close emoji picker' : 'Add emoji'"
             [attr.aria-label]="emojiPickerOpen() ? 'Close emoji picker' : 'Add emoji'"
+            (pointerdown)="$event.preventDefault()"
             (mousedown)="$event.preventDefault()"
             (click)="toggleEmojiPicker()"
           >
@@ -310,6 +311,7 @@ import { EmptyStateComponent } from '../../../shared/components/empty-state/empt
             [placeholder]="chat()?.isIncomingRequest ? 'Accept invitation to reply…' : 'Type a message…'"
             class="composer-input"
             aria-label="Type a message"
+            [attr.inputmode]="emojiPickerOpen() ? 'none' : 'text'"
             (click)="onInputClick()"
             (focus)="onInputFocus()"
             (input)="onInputChange()"
@@ -320,6 +322,7 @@ import { EmptyStateComponent } from '../../../shared/components/empty-state/empt
           <button
             type="submit"
             class="send-btn"
+            (pointerdown)="$event.preventDefault()"
             (mousedown)="$event.preventDefault()"
             [disabled]="(!inputText().trim() && !pendingAttachment()) || chat()?.isIncomingRequest"
             title="Send message"
@@ -1131,9 +1134,13 @@ export class ChatDetailComponent implements OnDestroy {
           const myId = this.authService.currentUser()?.id;
           const formatted = formatMessageToChatMessage(data.message, myId);
           this.upsertMessage(formatted);
-          this.scrollToBottom();
 
-          if (data.message.senderId !== myId) {
+          if (data.message.senderId === myId) {
+            this.scrollToBottom();
+          } else {
+            if (!this.showScrollBottomBtn()) {
+              this.scrollToBottomSmooth();
+            }
             this.messagesService.markSeen(this.chatId()).subscribe();
           }
         }
@@ -1263,8 +1270,16 @@ export class ChatDetailComponent implements OnDestroy {
     const willOpen = !this.emojiPickerOpen();
     this.emojiPickerOpen.set(willOpen);
     this.attachMenuOpen.set(false);
-    if (!willOpen) {
-      setTimeout(() => this.textInputRef?.nativeElement?.focus(), 50);
+    if (willOpen) {
+      this.textInputRef?.nativeElement?.blur();
+    } else {
+      setTimeout(() => {
+        const inputEl = this.textInputRef?.nativeElement;
+        if (inputEl) {
+          inputEl.focus();
+          inputEl.setSelectionRange?.(this.lastSelectionStart, this.lastSelectionEnd);
+        }
+      }, 50);
     }
     this.scrollToBottom();
   }
@@ -1273,7 +1288,14 @@ export class ChatDetailComponent implements OnDestroy {
     this.updateCursorPos();
     if (this.emojiPickerOpen()) {
       this.emojiPickerOpen.set(false);
-      this.scrollToBottom();
+      setTimeout(() => {
+        const inputEl = this.textInputRef?.nativeElement;
+        if (inputEl) {
+          inputEl.focus();
+          inputEl.setSelectionRange?.(this.lastSelectionStart, this.lastSelectionEnd);
+        }
+        this.scrollToBottom();
+      }, 50);
     }
   }
 
@@ -1407,6 +1429,12 @@ export class ChatDetailComponent implements OnDestroy {
     // Add optimistic bubble with sending clock icon
     this.upsertMessage(optimisticMsg);
     this.scrollToBottom();
+
+    if (!this.emojiPickerOpen()) {
+      setTimeout(() => {
+        this.textInputRef?.nativeElement?.focus();
+      }, 10);
+    }
 
     // Handle draft conversation (initiating to a new user)
     if (currentId.startsWith('new-')) {

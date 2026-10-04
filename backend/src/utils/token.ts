@@ -17,6 +17,9 @@ export interface RefreshTokenPayload {
 export interface TempActionTokenPayload {
   email: string;
   purpose: 'signup' | 'forgot_password';
+  googleId?: string;
+  name?: string;
+  avatarUrl?: string | null;
 }
 
 export function generateAccessToken(payload: AccessTokenPayload): string {

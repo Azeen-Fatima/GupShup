@@ -112,6 +112,7 @@ Completes account registration, creates initial "Notes to Self" conversation, an
 Logs in with email or username + password.
 - **Body**: `{ "identifier": "john_doe", "password": "Password123!" }`
 - **Response**: Sets `refreshToken` httpOnly cookie. Returns `user` and `accessToken`.
+- **Note**: For Google-only accounts (no password set), returns `401 Unauthorized` with code `GOOGLE_ACCOUNT_ONLY` and message `"This account uses Google sign-in. Please use Continue with Google."`.
 
 ### `POST /refresh`
 Rotates refresh token and issues new access token.
@@ -151,14 +152,24 @@ Confirms verification OTP and updates user's email.
 - **Body**: `{ "newEmail": "new@example.com", "code": "123456" }`
 
 ### `POST /google`
-Verifies Google OAuth ID token.
+Verifies Google OAuth ID token (audience must match `GOOGLE_CLIENT_ID` and `email_verified` must be `true`).
 - **Body**: `{ "idToken": "google_id_token" }`
-- **Response (existing user)**: Returns `{ "needsProfile": false, "user": { ... }, "accessToken": "jwt..." }`.
-- **Response (new user)**: Returns `{ "needsProfile": true, "googleToken": "jwt..." }`.
+- **Response (existing user)**: Returns `{ "needsProfile": false, "user": { ... }, "accessToken": "jwt..." }` and sets `refreshToken` cookie.
+- **Response (new user)**: Returns `{ "needsProfile": true, "googleToken": "jwt...", "email": "user@gmail.com", "name": "User Name", "avatarUrl": "https://..." }`.
 
 ### `POST /google/complete`
-Completes registration for a first-time Google sign-in.
-- **Body**: `{ "googleToken": "jwt...", "name": "Name", "username": "username" }`
+Completes registration for a first-time Google sign-in user (allows choosing unique username).
+- **Body**:
+```json
+{
+  "googleToken": "jwt...",
+  "name": "User Name",
+  "username": "chosen_username",
+  "avatarUrl": "https://...",
+  "password": "OptionalPassword123!"
+}
+```
+- **Response**: Sets `refreshToken` httpOnly cookie. Returns `user` and `accessToken`.
 
 ---
 

@@ -236,6 +236,7 @@ export class AuthService {
     googleToken: string;
     name: string;
     username: string;
+    avatarUrl?: string | null;
     password?: string;
   }): Observable<{ user: User; accessToken: string }> {
     return this.http

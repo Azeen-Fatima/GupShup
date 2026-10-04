@@ -26,7 +26,11 @@ if (!loadedEnvPath) {
 
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
-  PORT: z.coerce.number().default(3000),
+  PORT: z.preprocess((val) => {
+    if (!val || val === '' || val === '0' || val === 0) return 3000;
+    const num = Number(val);
+    return isNaN(num) || num <= 0 ? 3000 : num;
+  }, z.number().int().positive().default(3000)),
   CLIENT_URL: z.string().default('http://localhost:4200'),
   CLIENT_ORIGINS: z.string().optional().default(''),
   DATABASE_URL: z.string().min(1, 'DATABASE_URL is required'),

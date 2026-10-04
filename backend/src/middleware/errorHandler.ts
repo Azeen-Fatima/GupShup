@@ -75,12 +75,19 @@ export function errorHandler(
     if (err.code === 'P2025') {
       return sendError(res, 'Record not found', 404, 'NOT_FOUND');
     }
-    if (err.code === 'P1001' || err.code === 'P1008' || err.code === 'P2024') {
+    const dbUnavailableCodes = ['P1001', 'P1002', 'P1008', 'P1017', 'P2024'];
+    if (dbUnavailableCodes.includes(err.code)) {
       logger.error({ err: err.message, code: err.code }, 'Database connection/timeout error');
       return sendError(res, 'Database temporarily unavailable', 503, 'DATABASE_UNAVAILABLE');
     }
     logger.error({ err: err.message, code: err.code }, 'Prisma Database Error');
     return sendError(res, 'Database error occurred', 500, 'DATABASE_ERROR');
+  }
+
+  // Prisma Client Initialization Error (e.g. database down on start/connect)
+  if (err instanceof Prisma.PrismaClientInitializationError) {
+    logger.error({ err: err.message }, 'Prisma client initialization error');
+    return sendError(res, 'Database temporarily unavailable', 503, 'DATABASE_UNAVAILABLE');
   }
 
   // Catch-all unhandled error (generic 500 without leaking internals)

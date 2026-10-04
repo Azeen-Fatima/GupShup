@@ -1,10 +1,11 @@
-import { Component, inject, signal } from '@angular/core';
+import { Component, ElementRef, ViewChild, AfterViewInit, inject, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormBuilder, FormGroup, ReactiveFormsModule, Validators } from '@angular/forms';
 import { Router, RouterLink } from '@angular/router';
 import { ButtonComponent } from '../../../shared/components/button/button.component';
 import { SvgIconComponent } from '../../../shared/components/svg-icon/svg-icon.component';
 import { AuthService } from '../../../shared/services/auth.service';
+import { GoogleAuthService } from '../../../shared/services/google-auth.service';
 
 @Component({
   selector: 'app-login',
@@ -79,16 +80,19 @@ import { AuthService } from '../../../shared/services/auth.service';
             <span>or</span>
           </div>
 
-          <button
-            type="button"
-            class="google-btn"
-            (click)="continueWithGoogle()"
-            aria-label="Continue with Google"
-            [disabled]="isLoading()"
-          >
-            <app-svg-icon name="google" [size]="18"></app-svg-icon>
-            <span>Continue with Google</span>
-          </button>
+          <div class="google-btn-wrapper">
+            <button
+              type="button"
+              class="google-btn"
+              (click)="continueWithGoogle()"
+              aria-label="Continue with Google"
+              [disabled]="isLoading()"
+            >
+              <app-svg-icon name="google" [size]="18"></app-svg-icon>
+              <span>Continue with Google</span>
+            </button>
+            <div #googleBtnRef class="google-gsi-overlay" aria-hidden="true"></div>
+          </div>
         </form>
 
         <p class="auth-foot">
@@ -277,6 +281,32 @@ import { AuthService } from '../../../shared/services/auth.service';
       }
     }
 
+    .google-btn-wrapper {
+      position: relative;
+      width: 100%;
+      border-radius: 999px;
+      overflow: hidden;
+    }
+
+    .google-gsi-overlay {
+      position: absolute;
+      inset: 0;
+      opacity: 0.0001;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 2;
+      pointer-events: auto;
+
+      ::ng-deep iframe {
+        width: 100% !important;
+        height: 100% !important;
+        transform: scale(1.6);
+        cursor: pointer !important;
+      }
+    }
+
     .auth-foot {
       text-align: center;
       font-size: 12.5px;
@@ -300,10 +330,13 @@ import { AuthService } from '../../../shared/services/auth.service';
     }
   `],
 })
-export class LoginComponent {
+export class LoginComponent implements AfterViewInit {
   private readonly fb = inject(FormBuilder);
   private readonly router = inject(Router);
   private readonly authService = inject(AuthService);
+  private readonly googleAuthService = inject(GoogleAuthService);
+
+  @ViewChild('googleBtnRef') googleBtnRef?: ElementRef<HTMLDivElement>;
 
   readonly isLoading = signal<boolean>(false);
   readonly loginError = signal<string>('');
@@ -312,6 +345,18 @@ export class LoginComponent {
     identifier: ['', [Validators.required]],
     password: ['', [Validators.required, Validators.minLength(6)]],
   });
+
+  ngAfterViewInit(): void {
+    this.googleAuthService
+      .initialize((credential) => {
+        this.handleGoogleCredential(credential);
+      })
+      .then((success) => {
+        if (success && this.googleBtnRef?.nativeElement) {
+          this.googleAuthService.renderButton(this.googleBtnRef.nativeElement);
+        }
+      });
+  }
 
   isInvalid(controlName: string): boolean {
     const ctrl = this.loginForm.get(controlName);
@@ -351,6 +396,49 @@ export class LoginComponent {
   }
 
   continueWithGoogle(): void {
-    this.loginError.set('Google sign-in is available when Google Client ID is configured.');
+    if (this.isLoading()) return;
+    this.clearError();
+    if (this.googleAuthService.isLoaded()) {
+      this.googleAuthService.prompt();
+    } else {
+      this.googleAuthService.loadScript().then((loaded) => {
+        if (loaded) {
+          this.googleAuthService.initialize((credential) => this.handleGoogleCredential(credential));
+          this.googleAuthService.prompt();
+        } else {
+          this.loginError.set('Google sign-in could not be loaded. Please check your connection or ad-blocker.');
+        }
+      });
+    }
+  }
+
+  private handleGoogleCredential(credential: string): void {
+    this.isLoading.set(true);
+    this.clearError();
+
+    this.authService.googleAuth(credential).subscribe({
+      next: (res) => {
+        this.isLoading.set(false);
+        if (res.needsProfile) {
+          this.router.navigate(['/signup'], {
+            state: {
+              fromGoogle: true,
+              googleToken: res.googleToken,
+              email: res.email,
+              name: res.name,
+              avatarUrl: res.avatarUrl,
+            },
+          });
+        } else {
+          this.router.navigate(['/chats']);
+        }
+      },
+      error: (err) => {
+        this.isLoading.set(false);
+        this.loginError.set(
+          err?.error?.error?.message || err?.error?.message || 'Google sign-in failed. Please try again.'
+        );
+      },
+    });
   }
 }

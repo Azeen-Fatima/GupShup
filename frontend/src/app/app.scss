@@ -64,16 +64,16 @@
 @media (max-width: 520px) {
   .stage {
     padding: 0;
-    height: 100dvh;
-    max-height: 100dvh;
+    height: var(--app-height, 100dvh);
+    max-height: var(--app-height, 100dvh);
     align-items: stretch;
   }
 
   .app-card {
     width: 100%;
-    height: 100dvh;
-    min-height: 100dvh;
-    max-height: 100dvh;
+    height: var(--app-height, 100dvh);
+    min-height: var(--app-height, 100dvh);
+    max-height: var(--app-height, 100dvh);
     border-radius: 0;
     border: none;
     box-shadow: none;

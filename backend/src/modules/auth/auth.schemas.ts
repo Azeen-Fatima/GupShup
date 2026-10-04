@@ -48,6 +48,7 @@ export const googleCompleteProfileSchema = z.object({
     .trim()
     .toLowerCase()
     .regex(usernameRegex, 'Username must be 3-20 characters and contain only lowercase letters, numbers, dots, and underscores'),
+  avatarUrl: z.string().url().nullable().optional(),
   password: z.string().min(8, 'Password must be at least 8 characters').optional(),
 });
 export const completeGoogleProfileSchema = googleCompleteProfileSchema;

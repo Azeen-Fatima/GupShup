@@ -188,8 +188,12 @@ export class AuthService {
       },
     });
 
-    if (!user || !user.passwordHash) {
+    if (!user) {
       throw new UnauthorizedError('Invalid email/username or password', 'INVALID_CREDENTIALS');
+    }
+
+    if (!user.passwordHash) {
+      throw new UnauthorizedError('This account uses Google sign-in. Please use Continue with Google.', 'GOOGLE_ACCOUNT_ONLY');
     }
 
     const isMatch = await bcrypt.compare(password, user.passwordHash);
@@ -422,6 +426,9 @@ export class AuthService {
   async googleAuth(idToken: string): Promise<{
     needsProfile: boolean;
     googleToken?: string;
+    email?: string;
+    name?: string;
+    avatarUrl?: string | null;
     user?: { id: string; email: string; username: string; name: string; avatarUrl: string | null };
     accessToken?: string;
     refreshToken?: string;
@@ -444,6 +451,10 @@ export class AuthService {
     const payload = ticket.getPayload();
     if (!payload || !payload.email) {
       throw new UnauthorizedError('Google token does not contain a valid email', 'INVALID_GOOGLE_PAYLOAD');
+    }
+
+    if (!payload.email_verified) {
+      throw new UnauthorizedError('Google email is not verified', 'EMAIL_NOT_VERIFIED');
     }
 
     const email = payload.email.toLowerCase().trim();
@@ -485,12 +496,18 @@ export class AuthService {
     // New Google user needs profile setup (choose unique username)
     const googleToken = generateTempToken({
       email,
+      googleId,
+      name,
+      avatarUrl,
       purpose: 'signup',
     });
 
     return {
       needsProfile: true,
       googleToken,
+      email,
+      name,
+      avatarUrl,
     };
   }
 
@@ -501,6 +518,7 @@ export class AuthService {
     googleToken: string;
     name: string;
     username: string;
+    avatarUrl?: string | null;
     password?: string;
   }): Promise<{
     user: { id: string; email: string; username: string; name: string; avatarUrl: string | null };
@@ -526,6 +544,8 @@ export class AuthService {
           email: normalizedEmail,
           username: normalizedUsername,
           name: data.name.trim(),
+          googleId: payload.googleId,
+          avatarUrl: data.avatarUrl !== undefined ? data.avatarUrl : (payload.avatarUrl || null),
           passwordHash,
         },
       });
