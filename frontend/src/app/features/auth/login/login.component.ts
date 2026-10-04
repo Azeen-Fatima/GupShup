@@ -1,7 +1,8 @@
-import { Component, ElementRef, ViewChild, AfterViewInit, inject, signal } from '@angular/core';
+import { Component, ElementRef, ViewChild, OnInit, AfterViewInit, OnDestroy, inject, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormBuilder, FormGroup, ReactiveFormsModule, Validators } from '@angular/forms';
 import { Router, RouterLink } from '@angular/router';
+import { Subscription } from 'rxjs';
 import { ButtonComponent } from '../../../shared/components/button/button.component';
 import { SvgIconComponent } from '../../../shared/components/svg-icon/svg-icon.component';
 import { AuthService } from '../../../shared/services/auth.service';
@@ -91,7 +92,7 @@ import { GoogleAuthService } from '../../../shared/services/google-auth.service'
               <app-svg-icon name="google" [size]="18"></app-svg-icon>
               <span>Continue with Google</span>
             </button>
-            <div #googleBtnRef class="google-gsi-overlay" aria-hidden="true"></div>
+            <div #googleBtnRef class="google-gsi-overlay"></div>
           </div>
         </form>
 
@@ -257,7 +258,8 @@ import { GoogleAuthService } from '../../../shared/services/google-auth.service'
 
     .google-btn {
       width: 100%;
-      padding: 11px 16px;
+      height: 44px;
+      padding: 0 16px;
       border: 1.5px solid var(--border);
       border-radius: 999px;
       background: transparent;
@@ -284,25 +286,31 @@ import { GoogleAuthService } from '../../../shared/services/google-auth.service'
     .google-btn-wrapper {
       position: relative;
       width: 100%;
+      height: 44px;
       border-radius: 999px;
       overflow: hidden;
     }
 
     .google-gsi-overlay {
       position: absolute;
-      inset: 0;
-      opacity: 0.0001;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 44px;
+      min-height: 44px;
+      opacity: 0.001;
       overflow: hidden;
       display: flex;
       align-items: center;
       justify-content: center;
-      z-index: 2;
+      z-index: 10;
       pointer-events: auto;
+      cursor: pointer;
 
       ::ng-deep iframe {
         width: 100% !important;
-        height: 100% !important;
-        transform: scale(1.6);
+        height: 44px !important;
+        min-height: 44px !important;
         cursor: pointer !important;
       }
     }
@@ -330,32 +338,55 @@ import { GoogleAuthService } from '../../../shared/services/google-auth.service'
     }
   `],
 })
-export class LoginComponent implements AfterViewInit {
+export class LoginComponent implements OnInit, AfterViewInit, OnDestroy {
   private readonly fb = inject(FormBuilder);
   private readonly router = inject(Router);
   private readonly authService = inject(AuthService);
   private readonly googleAuthService = inject(GoogleAuthService);
 
-  @ViewChild('googleBtnRef') googleBtnRef?: ElementRef<HTMLDivElement>;
+  @ViewChild('googleBtnRef') set googleBtnRef(ref: ElementRef<HTMLDivElement> | undefined) {
+    this._googleBtnRef = ref;
+    if (ref?.nativeElement) {
+      this.renderGoogleButton(ref.nativeElement);
+    }
+  }
+  private _googleBtnRef?: ElementRef<HTMLDivElement>;
 
   readonly isLoading = signal<boolean>(false);
   readonly loginError = signal<string>('');
+
+  private googleSub?: Subscription;
 
   readonly loginForm: FormGroup = this.fb.group({
     identifier: ['', [Validators.required]],
     password: ['', [Validators.required, Validators.minLength(6)]],
   });
 
+  ngOnInit(): void {
+    this.googleSub = this.googleAuthService.credential$.subscribe((credential) => {
+      this.handleGoogleCredential(credential);
+    });
+  }
+
   ngAfterViewInit(): void {
-    this.googleAuthService
-      .initialize((credential) => {
-        this.handleGoogleCredential(credential);
-      })
-      .then((success) => {
-        if (success && this.googleBtnRef?.nativeElement) {
-          this.googleAuthService.renderButton(this.googleBtnRef.nativeElement);
-        }
-      });
+    if (this._googleBtnRef?.nativeElement) {
+      this.renderGoogleButton(this._googleBtnRef.nativeElement);
+    }
+  }
+
+  private renderGoogleButton(el: HTMLElement): void {
+    this.googleAuthService.initialize().then((success) => {
+      if (success && el) {
+        const explicitWidth = el.parentElement?.clientWidth || 368;
+        this.googleAuthService.renderButton(el, explicitWidth);
+      } else if (this.googleAuthService.scriptError()) {
+        this.loginError.set(this.googleAuthService.scriptError()!);
+      }
+    });
+  }
+
+  ngOnDestroy(): void {
+    this.googleSub?.unsubscribe();
   }
 
   isInvalid(controlName: string): boolean {
@@ -398,18 +429,37 @@ export class LoginComponent implements AfterViewInit {
   continueWithGoogle(): void {
     if (this.isLoading()) return;
     this.clearError();
-    if (this.googleAuthService.isLoaded()) {
-      this.googleAuthService.prompt();
-    } else {
-      this.googleAuthService.loadScript().then((loaded) => {
-        if (loaded) {
-          this.googleAuthService.initialize((credential) => this.handleGoogleCredential(credential));
-          this.googleAuthService.prompt();
-        } else {
-          this.loginError.set('Google sign-in could not be loaded. Please check your connection or ad-blocker.');
+
+    if (this.googleAuthService.scriptError()) {
+      this.loginError.set(this.googleAuthService.scriptError()!);
+      return;
+    }
+    if (this.googleAuthService.originError()) {
+      this.loginError.set(this.googleAuthService.originError()!);
+      return;
+    }
+
+    this.googleAuthService.initialize().then((loaded) => {
+      if (!loaded) {
+        const err =
+          this.googleAuthService.scriptError() ||
+          'Google sign-in could not be loaded. Please check your connection or ad-blocker.';
+        this.loginError.set(err);
+        return;
+      }
+      this.googleAuthService.prompt((notification) => {
+        if (notification?.isNotDisplayed?.()) {
+          const reason = notification.getNotDisplayedReason?.();
+          if (reason === 'origin_not_allowed' || reason === 'unregistered_origin') {
+            this.loginError.set(
+              'This domain is not authorized for Google Sign-In (origin_not_allowed). Please check Google Cloud Console credentials.'
+            );
+          } else if (this.googleAuthService.originError()) {
+            this.loginError.set(this.googleAuthService.originError()!);
+          }
         }
       });
-    }
+    });
   }
 
   private handleGoogleCredential(credential: string): void {
