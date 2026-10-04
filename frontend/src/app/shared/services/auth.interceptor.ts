@@ -50,9 +50,9 @@ export const authInterceptor: HttpInterceptorFn = (req, next) => {
       if (error instanceof HttpErrorResponse && error.status === 401) {
         // Do not attempt refresh on auth endpoints to prevent infinite loops
         const isAuthEndpoint =
-          req.url.includes('/api/v1/auth/refresh') ||
-          req.url.includes('/api/v1/auth/login') ||
-          req.url.includes('/api/v1/auth/signup');
+          req.url.includes('/auth/refresh') ||
+          req.url.includes('/auth/login') ||
+          req.url.includes('/auth/signup');
 
         if (isAuthEndpoint) {
           return throwError(() => error);

@@ -12,6 +12,7 @@ import {
 } from '../../utils/errors';
 import {
   createAndStoreOtp,
+  rollbackOtpCooldown,
   verifyStoredOtp,
 } from '../../utils/otp';
 import { sendOtpEmail } from '../../utils/mailer';
@@ -51,7 +52,12 @@ export class AuthService {
     }
 
     const { code, cooldownSeconds } = await createAndStoreOtp(normalizedEmail, 'signup');
-    await sendOtpEmail(normalizedEmail, code, 'creating your Gupshup account');
+    try {
+      await sendOtpEmail(normalizedEmail, code, 'creating your Gupshup account');
+    } catch (err) {
+      await rollbackOtpCooldown(normalizedEmail, 'signup');
+      throw err;
+    }
 
     return { message: 'Verification code sent to your email.', cooldownSeconds };
   }
@@ -268,7 +274,12 @@ export class AuthService {
     if (user) {
       const result = await createAndStoreOtp(normalizedEmail, 'forgot_password');
       cooldownSeconds = result.cooldownSeconds;
-      await sendOtpEmail(normalizedEmail, result.code, 'resetting your Gupshup password');
+      try {
+        await sendOtpEmail(normalizedEmail, result.code, 'resetting your Gupshup password');
+      } catch (err) {
+        await rollbackOtpCooldown(normalizedEmail, 'forgot_password');
+        throw err;
+      }
     }
 
     return {

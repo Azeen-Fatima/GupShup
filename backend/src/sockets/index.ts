@@ -1,6 +1,6 @@
 import { Server as HttpServer } from 'http';
 import { Server, ServerOptions } from 'socket.io';
-import { env } from '../config/env';
+import { env, getAllowedOrigins } from '../config/env';
 import { logger } from '../config/logger';
 import { socketAuthMiddleware, AuthenticatedSocket } from './socket.auth';
 import { registerSocketHandlers } from './socket.handlers';
@@ -9,18 +9,15 @@ import { prisma } from '../db/prisma';
 let io: Server | null = null;
 
 export function initSocketServer(httpServer: HttpServer): Server {
-  const allowedOrigins = [
-    env.CLIENT_URL,
-    'http://localhost:4200',
-    'http://127.0.0.1:4200',
-  ].filter(Boolean);
+  const allowedOrigins = getAllowedOrigins();
 
   const options: Partial<ServerOptions> = {
+    transports: ['websocket', 'polling'],
     cors: {
       origin: (origin, callback) => {
         // Allow requests with no origin (like mobile apps, curl, or tests)
         if (!origin) return callback(null, true);
-        if (allowedOrigins.includes(origin) || env.NODE_ENV !== 'production') {
+        if (allowedOrigins.includes(origin) || (env.NODE_ENV !== 'production' && origin.includes('localhost'))) {
           return callback(null, true);
         }
         return callback(new Error('Not allowed by CORS'));

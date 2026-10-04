@@ -13,7 +13,7 @@ export function getRefreshTokenCookieOptions() {
   return {
     httpOnly: true,
     secure: isProd,
-    sameSite: (isProd ? 'none' : 'lax') as 'none' | 'lax',
+    sameSite: (isProd ? env.COOKIE_SAMESITE : 'lax') as 'lax' | 'none' | 'strict',
     path: '/',
     maxAge: 7 * 24 * 60 * 60 * 1000,
   };
@@ -24,7 +24,7 @@ export function getClearCookieOptions() {
   return {
     httpOnly: true,
     secure: isProd,
-    sameSite: (isProd ? 'none' : 'lax') as 'none' | 'lax',
+    sameSite: (isProd ? env.COOKIE_SAMESITE : 'lax') as 'lax' | 'none' | 'strict',
     path: '/',
   };
 }

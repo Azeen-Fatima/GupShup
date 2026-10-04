@@ -68,6 +68,42 @@ npm start
 
 ---
 
+## Deployment on Render (Web Service)
+
+1. **Create Web Service on Render**:
+   - **Repository**: Connect your GitHub repository
+   - **Root Directory**: `backend`
+   - **Runtime**: `Node`
+   - **Build Command**: `npm install && npx prisma migrate deploy && npm run build`
+   - **Start Command**: `npm start` (runs `node dist/server.js`)
+
+2. **Environment Variables on Render**:
+   - `NODE_ENV`: `production`
+   - `PORT`: `10000` (or leave default, Render sets `PORT` automatically)
+   - `DATABASE_URL`: Supabase PostgreSQL connection string (Transaction/Session pooler)
+   - `REDIS_URL`: Upstash Redis TLS connection string (`rediss://...`)
+   - `JWT_ACCESS_SECRET`: 64+ char random hex string
+   - `JWT_REFRESH_SECRET`: 64+ char random hex string
+   - `JWT_ACCESS_EXPIRES`: `15m`
+   - `JWT_REFRESH_EXPIRES`: `7d`
+   - `CLIENT_ORIGINS`: Comma-separated list of allowed frontend origins (e.g. `https://gupshup-app.onrender.com,http://localhost:4200`)
+   - `COOKIE_SAMESITE`: `lax` (default, recommended when using Render Static Site `/api/*` rewrite proxy) or `none` (if using separate domains without rewrite)
+   - `RESEND_API_KEY`: Resend API key (recommended because Render free tier blocks outbound SMTP ports 25, 465, 587)
+   - `MAIL_FROM`: `Gupshup <onboarding@resend.dev>` (or your verified domain on Resend)
+   - `CLOUDINARY_CLOUD_NAME`: Cloudinary cloud name
+   - `CLOUDINARY_API_KEY`: Cloudinary API key
+   - `CLOUDINARY_API_SECRET`: Cloudinary API secret
+   - `OTP_TTL_SECONDS`: `600`
+
+3. **Database Migrations**:
+   Run schema migrations safely during deployment via:
+   ```bash
+   npx prisma migrate deploy
+   ```
+   (included in the build command above).
+
+---
+
 ## Key Features & Business Rules
 
 1. **Self Chat ("Notes to Self")**:

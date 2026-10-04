@@ -4,7 +4,8 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
-    testTimeout: 30000,
+    testTimeout: 60000,
+    hookTimeout: 60000,
     fileParallelism: false,
     pool: 'forks',
     poolOptions: {

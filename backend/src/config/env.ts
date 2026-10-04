@@ -28,18 +28,21 @@ const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   PORT: z.coerce.number().default(3000),
   CLIENT_URL: z.string().default('http://localhost:4200'),
+  CLIENT_ORIGINS: z.string().optional().default(''),
   DATABASE_URL: z.string().min(1, 'DATABASE_URL is required'),
   REDIS_URL: z.string().min(1, 'REDIS_URL is required'),
   JWT_ACCESS_SECRET: z.string().min(1, 'JWT_ACCESS_SECRET is required'),
   JWT_REFRESH_SECRET: z.string().min(1, 'JWT_REFRESH_SECRET is required'),
   JWT_ACCESS_EXPIRES: z.string().default('15m'),
   JWT_REFRESH_EXPIRES: z.string().default('7d'),
+  COOKIE_SAMESITE: z.enum(['lax', 'none', 'strict']).default('lax'),
   GOOGLE_CLIENT_ID: z.string().optional().default(''),
+  RESEND_API_KEY: z.string().optional().default(''),
   SMTP_HOST: z.string().optional().default(''),
   SMTP_PORT: z.coerce.number().optional().default(587),
   SMTP_USER: z.string().optional().default(''),
   SMTP_PASS: z.string().optional().default(''),
-  MAIL_FROM: z.string().optional().default('no-reply@gupshup.chat'),
+  MAIL_FROM: z.string().default('Gupshup <onboarding@resend.dev>'),
   CLOUDINARY_CLOUD_NAME: z.string().optional().default(''),
   CLOUDINARY_API_KEY: z.string().optional().default(''),
   CLOUDINARY_API_SECRET: z.string().optional().default(''),
@@ -72,6 +75,29 @@ if (!parsed.success) {
 
 export const env = parsed.data;
 
-export const allowedOrigins = env.CLIENT_URL.split(',')
-  .map((origin) => origin.trim())
-  .filter(Boolean);
+export function getAllowedOrigins(): string[] {
+  const origins = new Set<string>();
+
+  if (env.CLIENT_ORIGINS) {
+    env.CLIENT_ORIGINS.split(',')
+      .map((origin) => origin.trim())
+      .filter(Boolean)
+      .forEach((origin) => origins.add(origin));
+  }
+
+  if (env.CLIENT_URL) {
+    env.CLIENT_URL.split(',')
+      .map((origin) => origin.trim())
+      .filter(Boolean)
+      .forEach((origin) => origins.add(origin));
+  }
+
+  if (env.NODE_ENV !== 'production') {
+    origins.add('http://localhost:4200');
+    origins.add('http://127.0.0.1:4200');
+  }
+
+  return Array.from(origins);
+}
+
+export const allowedOrigins = getAllowedOrigins();

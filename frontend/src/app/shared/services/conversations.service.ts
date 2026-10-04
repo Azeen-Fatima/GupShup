@@ -9,7 +9,7 @@ import { ApiResponse, ConversationItem, Message } from '../models/api.models';
 })
 export class ConversationsService {
   private readonly http = inject(HttpClient);
-  private readonly baseUrl = `${environment.apiUrl}/api/v1/conversations`;
+  private readonly baseUrl = `${environment.apiUrl}/conversations`;
 
   // Reactive state of all conversations
   readonly conversations = signal<ConversationItem[]>([]);

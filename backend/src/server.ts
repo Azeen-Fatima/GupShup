@@ -5,15 +5,19 @@ import { logger } from './config/logger';
 import { initSocketServer } from './sockets';
 import { prisma } from './db/prisma';
 import { redis } from './redis/client';
+import { logActiveEmailProvider } from './utils/mailer';
 
 const server = http.createServer(app);
 
 // Initialize Socket.io
 initSocketServer(server);
 
+// Log active email provider at startup
+logActiveEmailProvider();
+
 // Start server
-server.listen(env.PORT, () => {
-  logger.info(`Gupshup backend server running on http://localhost:${env.PORT}`);
+server.listen(env.PORT, '0.0.0.0', () => {
+  logger.info(`Gupshup backend server running on http://0.0.0.0:${env.PORT}`);
   logger.info(`Environment: ${env.NODE_ENV}`);
 });
 

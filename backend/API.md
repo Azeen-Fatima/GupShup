@@ -1,7 +1,10 @@
 # Gupshup API Documentation
 
-Base URL: `http://localhost:3000/api/v1`  
-WebSocket URL: `ws://localhost:3000` (or `http://localhost:3000`)
+- Development Base URL: `http://localhost:3000/api/v1`  
+- Production Base URL: `/api/v1` (via Render Static Site rewrite proxy) or `https://<backend-service>.onrender.com/api/v1`
+- WebSocket URL: `http://localhost:3000` (Dev) / `https://<backend-service>.onrender.com` (Prod)
+- Reverse Proxy: Configured with `app.set('trust proxy', 1)` for Render load balancers.
+- Email Provider: Resend HTTP API (Primary) with fallback to SMTP Nodemailer. Returns 503 on email delivery failure without consuming OTP cooldown.
 
 ---
 

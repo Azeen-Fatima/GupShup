@@ -72,6 +72,25 @@ export async function createAndStoreOtp(email: string, purpose: OtpPurpose): Pro
   return { code, cooldownSeconds };
 }
 
+/**
+ * Rollback cooldown and resend count if email delivery fails
+ */
+export async function rollbackOtpCooldown(email: string, purpose: OtpPurpose): Promise<void> {
+  const normalizedEmail = email.toLowerCase().trim();
+  const cooldownKey = `otp_cooldown:${purpose}:${normalizedEmail}`;
+  const resendCountKey = `otp_resend_count:${purpose}:${normalizedEmail}`;
+  await redis.del(cooldownKey);
+  const countStr = await redis.get(resendCountKey);
+  if (countStr) {
+    const count = parseInt(countStr, 10);
+    if (count <= 1) {
+      await redis.del(resendCountKey);
+    } else {
+      await redis.set(resendCountKey, String(count - 1), 'EX', env.OTP_TTL_SECONDS);
+    }
+  }
+}
+
 export async function verifyStoredOtp(email: string, purpose: OtpPurpose, code: string): Promise<boolean> {
   const normalizedEmail = email.toLowerCase().trim();
   const otpKey = `otp:${purpose}:${normalizedEmail}`;

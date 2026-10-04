@@ -24,7 +24,7 @@ export class AuthService {
   // Initialization status for initial silent refresh check
   readonly isInitialized = signal<boolean>(false);
 
-  private readonly baseUrl = `${environment.apiUrl}/api/v1/auth`;
+  private readonly baseUrl = `${environment.apiUrl}/auth`;
 
   /**
    * Request signup verification code
@@ -122,7 +122,7 @@ export class AuthService {
    */
   fetchProfile(): Observable<User> {
     return this.http
-      .get<ApiResponse<{ user: User }>>(`${environment.apiUrl}/api/v1/users/me`)
+      .get<ApiResponse<{ user: User }>>(`${environment.apiUrl}/users/me`)
       .pipe(
         map((res) => res.data!.user),
         tap((user) => this.currentUser.set(user))

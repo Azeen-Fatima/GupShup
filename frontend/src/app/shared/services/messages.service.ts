@@ -22,7 +22,7 @@ export interface UploadAttachmentResult {
 })
 export class MessagesService {
   private readonly http = inject(HttpClient);
-  private readonly baseUrl = `${environment.apiUrl}/api/v1/conversations`;
+  private readonly baseUrl = `${environment.apiUrl}/conversations`;
 
   /**
    * Fetch paginated messages for a conversation
@@ -85,7 +85,7 @@ export class MessagesService {
 
     return this.http
       .post<ApiResponse<UploadAttachmentResult>>(
-        `${environment.apiUrl}/api/v1/uploads/image`,
+        `${environment.apiUrl}/uploads/image`,
         formData
       )
       .pipe(map((res) => res.data!));

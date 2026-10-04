@@ -2,7 +2,7 @@ import express, { Request, Response, NextFunction } from 'express';
 import helmet from 'helmet';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
-import { env } from './config/env';
+import { env, getAllowedOrigins } from './config/env';
 import { logger } from './config/logger';
 import { prisma } from './db/prisma';
 import { redis } from './redis/client';
@@ -18,6 +18,9 @@ import uploadsRouter from './modules/uploads/uploads.routes';
 
 const app = express();
 
+// Trust proxy for Render / load balancers
+app.set('trust proxy', 1);
+
 // Security headers
 app.use(
   helmet({
@@ -27,17 +30,13 @@ app.use(
 );
 
 // CORS configuration
-const allowedOrigins = [
-  env.CLIENT_URL,
-  'http://localhost:4200',
-  'http://127.0.0.1:4200',
-].filter(Boolean);
+const allowedOrigins = getAllowedOrigins();
 
 app.use(
   cors({
     origin: (origin, callback) => {
       if (!origin) return callback(null, true);
-      if (allowedOrigins.includes(origin) || env.NODE_ENV !== 'production') {
+      if (allowedOrigins.includes(origin) || (env.NODE_ENV !== 'production' && origin.includes('localhost'))) {
         return callback(null, true);
       }
       return callback(new Error('Blocked by CORS policy'));

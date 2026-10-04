@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import request from 'supertest';
 import { app } from '../src/app';
 import { capturedMails, clearCapturedMails } from '../src/utils/mailer';
@@ -6,12 +6,21 @@ import { cleanupTestUsers, createTestUser } from './test.helper';
 import { prisma } from '../src/db/prisma';
 
 describe('Auth Module Integration Tests', () => {
+  const originalFetch = global.fetch;
+
   beforeAll(async () => {
     await cleanupTestUsers();
     clearCapturedMails();
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ id: 'mock_auth_email' }),
+      text: async () => JSON.stringify({ id: 'mock_auth_email' }),
+    });
   });
 
   afterAll(async () => {
+    global.fetch = originalFetch;
     await cleanupTestUsers();
   });
 

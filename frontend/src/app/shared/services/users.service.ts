@@ -15,7 +15,7 @@ import {
 })
 export class UsersService {
   private readonly http = inject(HttpClient);
-  private readonly baseUrl = `${environment.apiUrl}/api/v1/users`;
+  private readonly baseUrl = `${environment.apiUrl}/users`;
 
   /**
    * Get logged-in user profile

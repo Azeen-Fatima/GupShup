@@ -1,6 +1,7 @@
 import nodemailer from 'nodemailer';
 import { env } from '../config/env';
 import { logger } from '../config/logger';
+import { ServiceUnavailableError } from './errors';
 
 export interface MailOptions {
   to: string;
@@ -23,6 +24,33 @@ export function getCapturedMails(): CapturedMail[] {
 
 export function clearCapturedMails(): void {
   capturedMails.length = 0;
+}
+
+export type EmailProviderType = 'resend' | 'smtp' | 'log_only';
+
+export function getActiveEmailProvider(): EmailProviderType {
+  if (env.RESEND_API_KEY && env.RESEND_API_KEY.trim().length > 0) {
+    return 'resend';
+  }
+  if (env.SMTP_HOST && env.SMTP_USER && env.SMTP_PASS) {
+    return 'smtp';
+  }
+  return 'log_only';
+}
+
+let hasLoggedProvider = false;
+export function logActiveEmailProvider(): void {
+  if (hasLoggedProvider) return;
+  hasLoggedProvider = true;
+
+  const provider = getActiveEmailProvider();
+  if (provider === 'resend') {
+    logger.info('[Email] Active email provider: Resend HTTP API (Primary)');
+  } else if (provider === 'smtp') {
+    logger.info('[Email] Active email provider: SMTP (Nodemailer fallback)');
+  } else {
+    logger.info('[Email] Active email provider: Console/Log-only (No external mail credentials set)');
+  }
 }
 
 let transporter: nodemailer.Transporter | null = null;
@@ -62,33 +90,83 @@ export async function sendOtpEmail(to: string, code: string, purposeDescription:
     code,
   };
 
-  // Capture for automated tests
+  // Capture for automated test verification
   capturedMails.push({ ...mail, sentAt: new Date() });
 
-  // In development, always log the OTP to the terminal (even when SMTP succeeds). Never log in production.
-  if (env.NODE_ENV === 'development') {
-    logger.info(`[DEV OTP] Code for ${to} (${purposeDescription}): >>> ${code} <<<`);
+  // Prominent terminal logging ONLY when NODE_ENV !== 'production'
+  if (env.NODE_ENV !== 'production') {
+    logger.info(`[OTP] For: ${to} | Code: ${code} | Expires: 10m`);
   }
 
-  const mailTransporter = getTransporter();
+  const provider = getActiveEmailProvider();
 
-  if (!mailTransporter) {
-    if (env.NODE_ENV !== 'development' && env.NODE_ENV !== 'test') {
-      logger.warn('SMTP credentials not configured. Email could not be sent.');
+  // 1. Resend HTTP API path
+  if (provider === 'resend') {
+    try {
+      const response = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${env.RESEND_API_KEY.trim()}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          from: env.MAIL_FROM,
+          to: [mail.to],
+          subject: mail.subject,
+          html: mail.html,
+          text: mail.text,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => '');
+        logger.error(
+          { status: response.status, body: errorText, to },
+          'Resend API error response when sending OTP'
+        );
+        throw new ServiceUnavailableError(
+          "We couldn't send the email right now. Please try again.",
+          'EMAIL_SEND_FAILED'
+        );
+      }
+
+      logger.info({ to }, 'OTP email successfully dispatched via Resend HTTP API');
+      return;
+    } catch (err: any) {
+      if (err instanceof ServiceUnavailableError) {
+        throw err;
+      }
+      logger.error({ err: err.message, to }, 'Failed to connect to Resend API');
+      throw new ServiceUnavailableError(
+        "We couldn't send the email right now. Please try again.",
+        'EMAIL_SEND_FAILED'
+      );
+    }
+  }
+
+  // 2. SMTP Nodemailer path
+  if (provider === 'smtp') {
+    const mailTransporter = getTransporter();
+    if (mailTransporter) {
+      try {
+        await mailTransporter.sendMail({
+          from: env.MAIL_FROM,
+          to: mail.to,
+          subject: mail.subject,
+          text: mail.text,
+          html: mail.html,
+        });
+        logger.info({ to }, 'OTP email successfully dispatched via SMTP');
+        return;
+      } catch (err: any) {
+        logger.error({ err: err.message, to }, 'Failed to dispatch email via SMTP');
+      }
     }
     return;
   }
 
-  try {
-    await mailTransporter.sendMail({
-      from: env.MAIL_FROM,
-      to: mail.to,
-      subject: mail.subject,
-      text: mail.text,
-      html: mail.html,
-    });
-    logger.info({ to }, 'OTP email successfully dispatched via SMTP');
-  } catch (err: any) {
-    logger.error({ err: err.message, to }, 'Failed to dispatch email via SMTP');
+  // 3. Log-only path (development / test without credentials)
+  if (env.NODE_ENV === 'production') {
+    logger.warn('No email provider configured in production (RESEND_API_KEY or SMTP credentials missing).');
   }
 }
