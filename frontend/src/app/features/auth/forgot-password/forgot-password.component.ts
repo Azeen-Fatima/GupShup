@@ -13,6 +13,7 @@ import { Router, RouterLink } from '@angular/router';
 import { ButtonComponent } from '../../../shared/components/button/button.component';
 import { SvgIconComponent } from '../../../shared/components/svg-icon/svg-icon.component';
 import { ToastService } from '../../../shared/services/toast.service';
+import { AuthService } from '../../../shared/services/auth.service';
 
 @Component({
   selector: 'app-forgot-password',
@@ -417,12 +418,14 @@ export class ForgotPasswordComponent implements OnDestroy {
   private readonly fb = inject(FormBuilder);
   private readonly router = inject(Router);
   private readonly toast = inject(ToastService);
+  private readonly authService = inject(AuthService);
 
   @ViewChildren('otpInput') otpInputs!: QueryList<ElementRef<HTMLInputElement>>;
 
   readonly currentStep = signal<number>(1);
   readonly otpDigits = signal<string[]>(['', '', '', '', '', '']);
   readonly otpError = signal<string>('');
+  readonly resetToken = signal<string | null>(null);
   readonly isLoading = signal<boolean>(false);
   readonly resendCountdown = signal<number>(30);
 
@@ -527,10 +530,19 @@ export class ForgotPasswordComponent implements OnDestroy {
   }
 
   resendCode(): void {
+    const email = this.forgotForm.get('email')!.value.trim();
     this.otpDigits.set(['', '', '', '', '', '']);
     this.otpError.set('');
-    this.startCountdown();
-    this.toast.info('New verification code sent');
+
+    this.authService.requestForgotPasswordOtp(email).subscribe({
+      next: () => {
+        this.startCountdown();
+        this.toast.info('New verification code sent');
+      },
+      error: (err) => {
+        this.toast.error(err?.error?.error?.message || 'Failed to resend code');
+      },
+    });
   }
 
   verifyCode(): void {
@@ -540,11 +552,21 @@ export class ForgotPasswordComponent implements OnDestroy {
       return;
     }
 
+    const email = this.forgotForm.get('email')!.value.trim();
     this.isLoading.set(true);
-    setTimeout(() => {
-      this.isLoading.set(false);
-      this.currentStep.set(3);
-    }, 600);
+
+    this.authService.verifyForgotPasswordOtp(email, code).subscribe({
+      next: (res) => {
+        this.isLoading.set(false);
+        this.resetToken.set(res.resetToken);
+        this.otpError.set('');
+        this.currentStep.set(3);
+      },
+      error: (err) => {
+        this.isLoading.set(false);
+        this.otpError.set(err?.error?.error?.message || 'Invalid or expired verification code');
+      },
+    });
   }
 
   onFormSubmit(): void {
@@ -555,25 +577,49 @@ export class ForgotPasswordComponent implements OnDestroy {
         return;
       }
 
+      const email = emailCtrl!.value.trim();
       this.isLoading.set(true);
-      setTimeout(() => {
-        this.isLoading.set(false);
-        this.currentStep.set(2);
-        this.startCountdown();
-        setTimeout(() => this.focusOtpBox(0), 50);
-      }, 600);
+
+      this.authService.requestForgotPasswordOtp(email).subscribe({
+        next: () => {
+          this.isLoading.set(false);
+          this.currentStep.set(2);
+          this.startCountdown();
+          this.toast.info('Verification code sent to your email');
+          setTimeout(() => this.focusOtpBox(0), 50);
+        },
+        error: (err) => {
+          this.isLoading.set(false);
+          this.toast.error(err?.error?.error?.message || 'Failed to send verification code');
+        },
+      });
     } else if (this.currentStep() === 3) {
       if (this.forgotForm.invalid) {
         this.forgotForm.markAllAsTouched();
         return;
       }
 
+      const token = this.resetToken();
+      if (!token) {
+        this.toast.error('Session expired. Please request a new code.');
+        this.currentStep.set(1);
+        return;
+      }
+
+      const newPassword = this.forgotForm.get('newPassword')!.value;
       this.isLoading.set(true);
-      setTimeout(() => {
-        this.isLoading.set(false);
-        this.toast.success('Password reset successfully!');
-        this.router.navigate(['/login']);
-      }, 700);
+
+      this.authService.resetPassword(token, newPassword).subscribe({
+        next: () => {
+          this.isLoading.set(false);
+          this.toast.success('Password reset successfully! Please log in.');
+          this.router.navigate(['/login']);
+        },
+        error: (err) => {
+          this.isLoading.set(false);
+          this.toast.error(err?.error?.error?.message || 'Failed to reset password');
+        },
+      });
     }
   }
 }

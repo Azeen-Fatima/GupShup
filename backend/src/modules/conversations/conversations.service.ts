@@ -556,18 +556,41 @@ export class ConversationsService {
   }
 
   /**
-   * Unblock other user in a conversation
+   * Unblock other user in a conversation or by block/user ID
    */
   async unblockConversationUser(conversationId: string, userId: string) {
-    const conv = await prisma.conversation.findUnique({
+    let conv = await prisma.conversation.findUnique({
       where: { id: conversationId },
     });
 
-    if (!conv) {
-      throw new NotFoundError('Conversation not found', 'CONVERSATION_NOT_FOUND');
-    }
+    let targetUserId: string;
 
-    const targetUserId = conv.userAId === userId ? conv.userBId : conv.userAId;
+    if (conv) {
+      targetUserId = conv.userAId === userId ? conv.userBId : conv.userAId;
+    } else {
+      const block = await prisma.block.findFirst({
+        where: {
+          OR: [
+            { id: conversationId, blockerId: userId },
+            { blockerId: userId, blockedId: conversationId },
+          ],
+        },
+      });
+
+      if (!block) {
+        throw new NotFoundError('Conversation or block record not found', 'CONVERSATION_NOT_FOUND');
+      }
+
+      targetUserId = block.blockedId;
+      conv = await prisma.conversation.findFirst({
+        where: {
+          OR: [
+            { userAId: userId, userBId: targetUserId },
+            { userAId: targetUserId, userBId: userId },
+          ],
+        },
+      });
+    }
 
     await prisma.block.deleteMany({
       where: {
@@ -576,8 +599,10 @@ export class ConversationsService {
       },
     });
 
-    emitToUser(userId, 'conversation:updated', { conversationId, blocked: false });
-    emitToUser(targetUserId, 'conversation:updated', { conversationId, blockedByOther: false });
+    if (conv) {
+      emitToUser(userId, 'conversation:updated', { conversationId: conv.id, blocked: false });
+      emitToUser(targetUserId, 'conversation:updated', { conversationId: conv.id, blockedByOther: false });
+    }
 
     return { success: true };
   }

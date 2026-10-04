@@ -15,7 +15,7 @@ function fileFilter(req: any, file: Express.Multer.File, cb: multer.FileFilterCa
 
 export const uploadAvatar = multer({
   storage,
-  limits: { fileSize: 2 * 1024 * 1024 }, // 2MB
+  limits: { fileSize: 10 * 1024 * 1024 }, // 2MB
   fileFilter,
 }).single('file');
 

@@ -1,4 +1,5 @@
 import { Routes } from '@angular/router';
+import { authGuard, guestGuard } from './shared/services/auth.guard';
 
 export const routes: Routes = [
   {
@@ -10,12 +11,14 @@ export const routes: Routes = [
     path: 'signup',
     loadComponent: () =>
       import('./features/auth/signup/signup.component').then((m) => m.SignupComponent),
+    canActivate: [guestGuard],
     title: 'Sign Up · Gupshup',
   },
   {
     path: 'login',
     loadComponent: () =>
       import('./features/auth/login/login.component').then((m) => m.LoginComponent),
+    canActivate: [guestGuard],
     title: 'Login · Gupshup',
   },
   {
@@ -24,30 +27,34 @@ export const routes: Routes = [
       import('./features/auth/forgot-password/forgot-password.component').then(
         (m) => m.ForgotPasswordComponent
       ),
+    canActivate: [guestGuard],
     title: 'Forgot Password · Gupshup',
   },
   {
     path: 'chats',
     loadComponent: () =>
       import('./features/chats/chat-list/chat-list.component').then((m) => m.ChatListComponent),
+    canActivate: [authGuard],
     title: 'Chats · Gupshup',
   },
   {
     path: 'chats/:id',
     loadComponent: () =>
       import('./features/chats/chat-detail/chat-detail.component').then((m) => m.ChatDetailComponent),
+    canActivate: [authGuard],
     title: 'Chat · Gupshup',
   },
   {
     path: 'settings',
     loadComponent: () =>
       import('./features/settings/settings/settings.component').then((m) => m.SettingsComponent),
+    canActivate: [authGuard],
     title: 'Settings · Gupshup',
   },
   {
     path: '**',
     loadComponent: () =>
       import('./features/not-found/not-found.component').then((m) => m.NotFoundComponent),
-    title: 'Page Not Found · Gupshup',
+    title: '404 · Page Not Found',
   },
 ];

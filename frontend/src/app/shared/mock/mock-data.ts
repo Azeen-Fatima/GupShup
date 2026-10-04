@@ -44,6 +44,7 @@ export interface ChatItem {
   isPendingRequest?: boolean;   // Sender side (waiting for recipient to accept)
   isIncomingRequest?: boolean;  // Receiver side (X wants to message you)
   isSelfNotes?: boolean;
+  photoUrl?: string | null;
 }
 
 export interface DeclinedRequest {

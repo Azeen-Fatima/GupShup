@@ -4,6 +4,7 @@ import { FormBuilder, FormGroup, ReactiveFormsModule, Validators } from '@angula
 import { Router, RouterLink } from '@angular/router';
 import { ButtonComponent } from '../../../shared/components/button/button.component';
 import { SvgIconComponent } from '../../../shared/components/svg-icon/svg-icon.component';
+import { AuthService } from '../../../shared/services/auth.service';
 
 @Component({
   selector: 'app-login',
@@ -301,13 +302,14 @@ import { SvgIconComponent } from '../../../shared/components/svg-icon/svg-icon.c
 export class LoginComponent {
   private readonly fb = inject(FormBuilder);
   private readonly router = inject(Router);
+  private readonly authService = inject(AuthService);
 
   readonly isLoading = signal<boolean>(false);
   readonly loginError = signal<string>('');
 
   readonly loginForm: FormGroup = this.fb.group({
-    identifier: ['you@email.com', [Validators.required]],
-    password: ['12345678', [Validators.required, Validators.minLength(6)]],
+    identifier: ['', [Validators.required]],
+    password: ['', [Validators.required, Validators.minLength(6)]],
   });
 
   isInvalid(controlName: string): boolean {
@@ -331,22 +333,21 @@ export class LoginComponent {
     this.isLoading.set(true);
     this.loginError.set('');
 
-    setTimeout(() => {
-      this.isLoading.set(false);
-      // Simulate error if password is "wrong"
-      if (password === 'wrong') {
-        this.loginError.set('Incorrect email/username or password');
-        return;
-      }
-      this.router.navigate(['/chats']);
-    }, 600);
+    this.authService.login(identifier, password).subscribe({
+      next: () => {
+        this.isLoading.set(false);
+        this.router.navigate(['/chats']);
+      },
+      error: (err) => {
+        this.isLoading.set(false);
+        this.loginError.set(
+          err?.error?.error?.message || 'Invalid email/username or password. Please try again.'
+        );
+      },
+    });
   }
 
   continueWithGoogle(): void {
-    this.isLoading.set(true);
-    setTimeout(() => {
-      this.isLoading.set(false);
-      this.router.navigate(['/chats']);
-    }, 600);
+    this.loginError.set('Google sign-in is available when Google Client ID is configured.');
   }
 }

@@ -11,9 +11,19 @@ import {
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
-import { ChatService } from '../../../shared/services/chat.service';
+import { Subscription } from 'rxjs';
+import { ConversationsService } from '../../../shared/services/conversations.service';
+import { MessagesService } from '../../../shared/services/messages.service';
+import { UsersService } from '../../../shared/services/users.service';
+import { SocketService } from '../../../shared/services/socket.service';
+import { AuthService } from '../../../shared/services/auth.service';
 import { ToastService } from '../../../shared/services/toast.service';
-import { ChatMessage, MessageAttachment } from '../../../shared/mock/mock-data';
+import {
+  formatConversationToChatItem,
+  formatMessageToChatMessage,
+  getInitials,
+} from '../../../shared/models/api.models';
+import { ChatItem, ChatMessage, MessageAttachment } from '../../../shared/mock/mock-data';
 import { AvatarComponent } from '../../../shared/components/avatar/avatar.component';
 import { SvgIconComponent } from '../../../shared/components/svg-icon/svg-icon.component';
 import { BubbleComponent } from '../../../shared/components/bubble/bubble.component';
@@ -882,7 +892,11 @@ import { EmptyStateComponent } from '../../../shared/components/empty-state/empt
 export class ChatDetailComponent {
   private readonly route = inject(ActivatedRoute);
   private readonly router = inject(Router);
-  private readonly chatService = inject(ChatService);
+  private readonly conversationsService = inject(ConversationsService);
+  private readonly messagesService = inject(MessagesService);
+  private readonly usersService = inject(UsersService);
+  private readonly socketService = inject(SocketService);
+  private readonly authService = inject(AuthService);
   private readonly toast = inject(ToastService);
 
   @ViewChild('messageContainer') messageContainer!: ElementRef<HTMLDivElement>;
@@ -890,7 +904,7 @@ export class ChatDetailComponent {
   @ViewChild('imageInput') imageInputRef!: ElementRef<HTMLInputElement>;
   @ViewChild('docInput') docInputRef!: ElementRef<HTMLInputElement>;
 
-  readonly chatId = signal<string>('c1');
+  readonly chatId = signal<string>('');
   readonly inputText = signal<string>('');
   readonly isTyping = signal<boolean>(false);
   readonly showScrollBottomBtn = signal<boolean>(false);
@@ -899,9 +913,15 @@ export class ChatDetailComponent {
   readonly attachMenuOpen = signal<boolean>(false);
   readonly emojiPickerOpen = signal<boolean>(false);
   readonly pendingAttachment = signal<MessageAttachment | null>(null);
+  readonly pendingAttachmentFile = signal<File | null>(null);
+
+  readonly chat = signal<ChatItem | null>(null);
+  readonly messages = signal<ChatMessage[]>([]);
 
   private lastSelectionStart = 0;
   private lastSelectionEnd = 0;
+  private typingStopTimer: any = null;
+  private subscriptions: Subscription[] = [];
 
   // Modal dialog state
   readonly modalState = signal<{
@@ -920,28 +940,133 @@ export class ChatDetailComponent {
     onConfirm: null,
   });
 
-  readonly chat = computed(() => this.chatService.getChatById(this.chatId()));
-
-  readonly messages = computed(() => {
-    return this.chatService.getMessages(this.chatId());
-  });
-
   constructor() {
     this.route.paramMap.subscribe((params) => {
       const id = params.get('id');
       if (id) {
         this.chatId.set(id);
-        this.isTyping.set(id === 'c1');
+        this.conversationsService.activeConversationId.set(id);
         this.pendingAttachment.set(null);
+        this.pendingAttachmentFile.set(null);
         this.emojiPickerOpen.set(false);
-        this.scrollToBottom();
+        this.isTyping.set(false);
+
+        if (id.startsWith('new-')) {
+          this.setupDraftChat(id.replace('new-', ''));
+        } else {
+          this.loadConversation(id);
+        }
       }
     });
 
-    effect(() => {
-      this.messages();
-      this.scrollToBottom();
+    this.setupSocketListeners();
+  }
+
+  private setupDraftChat(targetUserId: string): void {
+    this.messages.set([]);
+    this.usersService.searchUsers(' ').subscribe({
+      next: (users) => {
+        const found = users.find((u) => u.id === targetUserId);
+        if (found) {
+          this.chat.set({
+            id: `new-${targetUserId}`,
+            name: found.name,
+            username: `@${found.username}`,
+            initials: getInitials(found.name),
+            isOnline: true,
+            lastMessage: '',
+            time: '',
+            unreadCount: 0,
+            isPendingRequest: true,
+            photoUrl: found.avatarUrl,
+          });
+        }
+      },
+      error: () => {},
     });
+  }
+
+  private loadConversation(id: string): void {
+    const myId = this.authService.currentUser()?.id;
+
+    // Load conversation metadata
+    this.conversationsService.getConversationById(id).subscribe({
+      next: (conv) => {
+        this.chat.set(formatConversationToChatItem(conv, myId));
+      },
+      error: () => {
+        this.toast.error('Conversation not found');
+        this.router.navigate(['/chats']);
+      },
+    });
+
+    // Load messages
+    this.messagesService.getMessages(id).subscribe({
+      next: (res) => {
+        const msgs = res.messages.map((m) => formatMessageToChatMessage(m, myId));
+        this.messages.set(msgs);
+        this.scrollToBottom();
+
+        // Mark as read
+        this.messagesService.markSeen(id).subscribe();
+      },
+      error: () => {},
+    });
+  }
+
+  private setupSocketListeners(): void {
+    // 1. Real-time incoming messages
+    this.subscriptions.push(
+      this.socketService.messageNew$.subscribe((data) => {
+        if (data.conversationId === this.chatId()) {
+          const myId = this.authService.currentUser()?.id;
+          const formatted = formatMessageToChatMessage(data.message, myId);
+
+          // Avoid duplicates
+          if (!this.messages().some((m) => m.id === formatted.id)) {
+            this.messages.update((list) => [...list, formatted]);
+            this.scrollToBottom();
+
+            if (data.message.senderId !== myId) {
+              this.messagesService.markSeen(this.chatId()).subscribe();
+            }
+          }
+        }
+      })
+    );
+
+    // 2. Real-time seen receipts
+    this.subscriptions.push(
+      this.socketService.messageSeen$.subscribe((data) => {
+        if (data.conversationId === this.chatId()) {
+          this.messages.update((list) =>
+            list.map((m) =>
+              m.sender === 'me' ? { ...m, status: 'seen' as const } : m
+            )
+          );
+        }
+      })
+    );
+
+    // 3. Real-time typing indicators
+    this.subscriptions.push(
+      this.socketService.typingUpdate$.subscribe((data) => {
+        const myId = this.authService.currentUser()?.id;
+        if (data.conversationId === this.chatId() && data.userId !== myId) {
+          this.isTyping.set(data.isTyping);
+        }
+      })
+    );
+
+    // 4. Real-time presence updates
+    this.subscriptions.push(
+      this.socketService.presenceUpdate$.subscribe((data) => {
+        const currentChat = this.chat();
+        if (currentChat && !currentChat.isSelfNotes) {
+          this.chat.update((c) => (c ? { ...c, isOnline: data.isOnline } : null));
+        }
+      })
+    );
   }
 
   @HostListener('document:click')
@@ -1039,6 +1164,14 @@ export class ChatDetailComponent {
 
   onInputChange(): void {
     this.updateCursorPos();
+    const id = this.chatId();
+    if (!id.startsWith('new-')) {
+      this.socketService.startTyping(id);
+      if (this.typingStopTimer) clearTimeout(this.typingStopTimer);
+      this.typingStopTimer = setTimeout(() => {
+        this.socketService.stopTyping(id);
+      }, 3000);
+    }
   }
 
   updateCursorPos(): void {
@@ -1090,6 +1223,7 @@ export class ChatDetailComponent {
     const file = input.files?.[0];
     if (!file) return;
 
+    this.pendingAttachmentFile.set(file);
     const url = URL.createObjectURL(file);
     const sizeStr = (file.size / (1024 * 1024)).toFixed(1) + ' MB';
 
@@ -1104,44 +1238,139 @@ export class ChatDetailComponent {
 
   clearAttachment(): void {
     this.pendingAttachment.set(null);
+    this.pendingAttachmentFile.set(null);
   }
 
   sendCurrentMessage(): void {
     const text = this.inputText().trim();
+    const attFile = this.pendingAttachmentFile();
     const att = this.pendingAttachment();
-    if (!text && !att) return;
 
-    this.chatService.sendMessage(this.chatId(), text, att || undefined);
+    if (!text && !attFile && !att) return;
+
+    const currentId = this.chatId();
     this.inputText.set('');
     this.pendingAttachment.set(null);
+    this.pendingAttachmentFile.set(null);
     this.lastSelectionStart = 0;
     this.lastSelectionEnd = 0;
-    this.scrollToBottom();
+
+    // Handle draft conversation (initiating to a new user)
+    if (currentId.startsWith('new-')) {
+      const recipientId = currentId.replace('new-', '');
+
+      if (attFile) {
+        this.messagesService.uploadAttachment(attFile).subscribe({
+          next: (uploadRes) => {
+            this.createAndSendConv(recipientId, text, {
+              type: 'image',
+              url: uploadRes.url,
+              name: attFile.name,
+            });
+          },
+          error: (err) => {
+            this.toast.error(err?.error?.error?.message || 'Attachment upload failed');
+          },
+        });
+      } else {
+        this.createAndSendConv(recipientId, text);
+      }
+      return;
+    }
+
+    // Normal message sending
+    if (attFile) {
+      this.messagesService.uploadAttachment(attFile).subscribe({
+        next: (uploadRes) => {
+          this.executeSendMessage(currentId, {
+            body: text,
+            type: 'image',
+            attachmentUrl: uploadRes.url,
+            attachmentName: attFile.name,
+          });
+        },
+        error: (err) => {
+          this.toast.error(err?.error?.error?.message || 'Attachment upload failed');
+        },
+      });
+    } else {
+      this.executeSendMessage(currentId, { body: text });
+    }
+  }
+
+  private createAndSendConv(recipientId: string, text: string, attachment?: any): void {
+    this.conversationsService.createConversation(recipientId, text, attachment).subscribe({
+      next: (res) => {
+        this.toast.success('Message sent!');
+        this.router.navigate(['/chats', res.conversationId], { replaceUrl: true });
+      },
+      error: (err) => {
+        this.toast.error(err?.error?.error?.message || 'Failed to send message');
+      },
+    });
+  }
+
+  private executeSendMessage(conversationId: string, payload: any): void {
+    this.messagesService.sendMessage(conversationId, payload).subscribe({
+      next: (msg) => {
+        const myId = this.authService.currentUser()?.id;
+        const formatted = formatMessageToChatMessage(msg, myId);
+        this.messages.update((list) => [...list, formatted]);
+        this.scrollToBottom();
+      },
+      error: (err) => {
+        this.toast.error(err?.error?.error?.message || 'Failed to send message');
+      },
+    });
   }
 
   // Request actions (Incoming)
   acceptIncoming(): void {
-    this.chatService.acceptIncomingRequest(this.chatId());
-    this.toast.success(`Chat request accepted`);
+    this.conversationsService.acceptConversation(this.chatId()).subscribe({
+      next: () => {
+        this.chat.update((c) => (c ? { ...c, isIncomingRequest: false, isPendingRequest: false } : null));
+        this.toast.success('Chat request accepted');
+      },
+      error: (err) => {
+        this.toast.error(err?.error?.error?.message || 'Failed to accept chat request');
+      },
+    });
   }
 
   declineIncoming(): void {
-    this.chatService.declineIncomingRequest(this.chatId());
-    this.toast.info(`Declined chat request`);
-    this.router.navigate(['/chats']);
+    this.conversationsService.declineConversation(this.chatId()).subscribe({
+      next: () => {
+        this.toast.info('Declined chat request');
+        this.router.navigate(['/chats']);
+      },
+      error: (err) => {
+        this.toast.error(err?.error?.error?.message || 'Failed to decline chat request');
+      },
+    });
   }
 
   blockIncoming(): void {
-    this.chatService.blockUser(this.chatId());
-    this.toast.info(`User blocked`);
+    this.conversationsService.blockUser(this.chatId()).subscribe({
+      next: () => {
+        this.chat.update((c) => (c ? { ...c, isBlocked: true } : null));
+        this.toast.info('User blocked');
+      },
+      error: (err) => {
+        this.toast.error(err?.error?.error?.message || 'Failed to block user');
+      },
+    });
   }
 
   unblockCurrentChat(): void {
-    const c = this.chat();
-    if (c) {
-      this.chatService.unblockUser(c.name);
-      this.toast.success(`Unblocked ${c.name}`);
-    }
+    this.conversationsService.unblockUser(this.chatId()).subscribe({
+      next: () => {
+        this.chat.update((c) => (c ? { ...c, isBlocked: false } : null));
+        this.toast.success('User unblocked');
+      },
+      error: (err) => {
+        this.toast.error(err?.error?.error?.message || 'Failed to unblock user');
+      },
+    });
   }
 
   // Header Menu Prompts with Modal
@@ -1155,8 +1384,15 @@ export class ChatDetailComponent {
       confirmText: 'Clear',
       isDanger: false,
       onConfirm: () => {
-        this.chatService.clearChat(this.chatId());
-        this.toast.info('Conversation cleared');
+        this.conversationsService.clearHistory(this.chatId()).subscribe({
+          next: () => {
+            this.messages.set([]);
+            this.toast.info('Conversation cleared');
+          },
+          error: (err) => {
+            this.toast.error(err?.error?.error?.message || 'Failed to clear chat');
+          },
+        });
       },
     });
   }
@@ -1167,13 +1403,19 @@ export class ChatDetailComponent {
     this.modalState.set({
       isOpen: true,
       title: 'Delete chat?',
-      message: `Delete chat with ${name}? This action cannot be undone.`,
+      message: `Delete chat with ${name}? This action will hide the conversation until a new message arrives.`,
       confirmText: 'Delete',
       isDanger: true,
       onConfirm: () => {
-        this.chatService.deleteChat(this.chatId());
-        this.toast.info(`Deleted chat with ${name}`);
-        this.router.navigate(['/chats']);
+        this.conversationsService.deleteConversation(this.chatId()).subscribe({
+          next: () => {
+            this.toast.info(`Deleted chat with ${name}`);
+            this.router.navigate(['/chats']);
+          },
+          error: (err) => {
+            this.toast.error(err?.error?.error?.message || 'Failed to delete chat');
+          },
+        });
       },
     });
   }
@@ -1184,12 +1426,19 @@ export class ChatDetailComponent {
     this.modalState.set({
       isOpen: true,
       title: 'Block user?',
-      message: `Block ${name}? They will not be able to message you directly.`,
+      message: `Block ${name}? They will no longer be able to message you directly.`,
       confirmText: 'Block',
       isDanger: true,
       onConfirm: () => {
-        this.chatService.blockUser(this.chatId());
-        this.toast.info(`Blocked ${name}`);
+        this.conversationsService.blockUser(this.chatId()).subscribe({
+          next: () => {
+            this.chat.update((c) => (c ? { ...c, isBlocked: true } : null));
+            this.toast.info(`Blocked ${name}`);
+          },
+          error: (err) => {
+            this.toast.error(err?.error?.error?.message || 'Failed to block user');
+          },
+        });
       },
     });
   }

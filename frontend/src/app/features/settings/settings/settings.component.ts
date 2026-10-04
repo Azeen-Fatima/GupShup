@@ -1,10 +1,14 @@
-import { Component, ElementRef, QueryList, ViewChildren, inject, signal } from '@angular/core';
+import { Component, ElementRef, OnInit, QueryList, ViewChildren, computed, inject, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormBuilder, FormGroup, ReactiveFormsModule, Validators } from '@angular/forms';
 import { Router, RouterLink } from '@angular/router';
-import { ChatService } from '../../../shared/services/chat.service';
+import { forkJoin, of } from 'rxjs';
+import { UsersService } from '../../../shared/services/users.service';
+import { AuthService } from '../../../shared/services/auth.service';
+import { ConversationsService } from '../../../shared/services/conversations.service';
 import { AppTheme, ThemeService } from '../../../shared/services/theme.service';
 import { ToastService } from '../../../shared/services/toast.service';
+import { BlockedItem, DeclinedItem, getInitials } from '../../../shared/models/api.models';
 import { AvatarComponent } from '../../../shared/components/avatar/avatar.component';
 import { ButtonComponent } from '../../../shared/components/button/button.component';
 import { SvgIconComponent } from '../../../shared/components/svg-icon/svg-icon.component';
@@ -46,9 +50,9 @@ import { EmptyStateComponent } from '../../../shared/components/empty-state/empt
             (change)="onAvatarSelected($event)"
           />
           <app-avatar
-            [name]="currentUser().name"
-            [initials]="currentUser().initials"
-            [photoUrl]="photoPreview() || currentUser().photoUrl"
+            [name]="currentUserDisplay().name"
+            [initials]="currentUserDisplay().initials"
+            [photoUrl]="photoPreview() || currentUserDisplay().photoUrl"
             [size]="'xl'"
           ></app-avatar>
 
@@ -61,7 +65,7 @@ import { EmptyStateComponent } from '../../../shared/components/empty-state/empt
             >
               Change profile picture
             </button>
-            @if (photoPreview() || currentUser().photoUrl) {
+            @if (photoPreview() || currentUserDisplay().photoUrl) {
               <button
                 type="button"
                 class="photo-action-btn danger"
@@ -97,14 +101,9 @@ import { EmptyStateComponent } from '../../../shared/components/empty-state/empt
               type="text"
               formControlName="username"
               class="form-input"
-              [class.invalid]="isInvalid('username') || isUsernameTaken()"
-              (input)="checkUsername()"
+              readonly
             />
-            @if (isUsernameTaken()) {
-              <span class="field-error">Username already taken</span>
-            } @else if (isInvalid('username')) {
-              <span class="field-error">Username is required (min 3 alphanumeric characters)</span>
-            }
+            <p class="field-hint">Usernames cannot be changed</p>
           </div>
 
           <div class="field-item">
@@ -182,19 +181,20 @@ import { EmptyStateComponent } from '../../../shared/components/empty-state/empt
               subtitle="You have no declined chat requests."
             ></app-empty-state>
           } @else {
-            @for (req of declinedRequests(); track req.id) {
+            @for (req of declinedRequests(); track req.conversationId) {
               <div class="sub-row">
                 <app-avatar
-                  [name]="req.name"
-                  [initials]="req.initials"
+                  [name]="req.user.name"
+                  [initials]="getInitials(req.user.name)"
+                  [photoUrl]="req.user.avatarUrl"
                   [size]="'sm'"
                 ></app-avatar>
-                <div class="sub-row-name">{{ req.name }}</div>
+                <div class="sub-row-name">{{ req.user.name }}</div>
                 <button
                   type="button"
                   class="teal-pill-btn"
-                  (click)="acceptRequest(req.id, req.name)"
-                  [attr.aria-label]="'Accept ' + req.name"
+                  (click)="acceptRequest(req.conversationId, req.user.name)"
+                  [attr.aria-label]="'Accept ' + req.user.name"
                 >
                   Accept
                 </button>
@@ -266,19 +266,20 @@ import { EmptyStateComponent } from '../../../shared/components/empty-state/empt
               subtitle="You haven't blocked any users."
             ></app-empty-state>
           } @else {
-            @for (user of blockedUsers(); track user.id) {
+            @for (item of blockedUsers(); track item.id) {
               <div class="sub-row">
                 <app-avatar
-                  [name]="user.name"
-                  [initials]="user.initials"
+                  [name]="item.user.name"
+                  [initials]="getInitials(item.user.name)"
+                  [photoUrl]="item.user.avatarUrl"
                   [size]="'sm'"
                 ></app-avatar>
-                <div class="sub-row-name">{{ user.name }}</div>
+                <div class="sub-row-name">{{ item.user.name }}</div>
                 <button
                   type="button"
                   class="teal-pill-btn"
-                  (click)="unblockUser(user.name)"
-                  [attr.aria-label]="'Unblock ' + user.name"
+                  (click)="unblockUser(item)"
+                  [attr.aria-label]="'Unblock ' + item.user.name"
                 >
                   Unblock
                 </button>
@@ -310,7 +311,7 @@ import { EmptyStateComponent } from '../../../shared/components/empty-state/empt
       >
         <p style="font-size: 13px; color: var(--muted); margin-bottom: 12px;">
           We sent a 6-digit verification code to
-          <strong>{{ profileForm.get('email')?.value }}</strong>.
+          <strong>{{ pendingNewEmail() }}</strong>.
         </p>
         <div class="otp-modal-row" role="group" aria-label="Verification code">
           @for (i of [0, 1, 2, 3, 4, 5]; track i) {
@@ -746,27 +747,42 @@ import { EmptyStateComponent } from '../../../shared/components/empty-state/empt
     }
   `],
 })
-export class SettingsComponent {
+export class SettingsComponent implements OnInit {
   private readonly fb = inject(FormBuilder);
   private readonly router = inject(Router);
-  private readonly chatService = inject(ChatService);
+  private readonly authService = inject(AuthService);
+  private readonly usersService = inject(UsersService);
+  private readonly conversationsService = inject(ConversationsService);
   private readonly themeService = inject(ThemeService);
   private readonly toast = inject(ToastService);
 
+  readonly getInitials = getInitials;
+
   @ViewChildren('emailOtpInput') emailOtpInputs!: QueryList<ElementRef<HTMLInputElement>>;
 
-  readonly currentUser = this.chatService.currentUser;
-  readonly declinedRequests = this.chatService.declinedRequests;
-  readonly blockedUsers = this.chatService.blockedUsers;
-  readonly declinedCount = this.chatService.declinedCount;
-  readonly blockedCount = this.chatService.blockedCount;
+  readonly currentUser = this.authService.currentUser;
+  readonly currentUserDisplay = computed(() => {
+    const u = this.currentUser();
+    return {
+      name: u?.name || '',
+      username: u?.username || '',
+      email: u?.email || '',
+      photoUrl: u?.avatarUrl || null,
+      initials: getInitials(u?.name || ''),
+    };
+  });
+
+  readonly declinedRequests = signal<DeclinedItem[]>([]);
+  readonly blockedUsers = signal<BlockedItem[]>([]);
+  readonly declinedCount = computed(() => this.declinedRequests().length);
+  readonly blockedCount = computed(() => this.blockedUsers().length);
   readonly currentTheme = this.themeService.currentTheme;
 
+  readonly selectedAvatarFile = signal<File | null>(null);
   readonly photoPreview = signal<string | null>(null);
   readonly declinedOpen = signal<boolean>(false);
   readonly blockedOpen = signal<boolean>(false);
   readonly isSaving = signal<boolean>(false);
-  readonly isUsernameTaken = signal<boolean>(false);
 
   // Modals
   readonly emailModalOpen = signal<boolean>(false);
@@ -774,13 +790,14 @@ export class SettingsComponent {
   readonly logoutModalOpen = signal<boolean>(false);
 
   // Email verification OTP
+  readonly pendingNewEmail = signal<string>('');
   readonly emailOtpDigits = signal<string[]>(['', '', '', '', '', '']);
   readonly emailOtpError = signal<string>('');
 
   readonly profileForm: FormGroup = this.fb.group({
-    name: [this.currentUser().name, [Validators.required, Validators.minLength(2)]],
-    username: [this.currentUser().username, [Validators.required, Validators.minLength(3), Validators.pattern(/^@?[a-zA-Z0-9_.]+$/)]],
-    email: [this.currentUser().email, [Validators.required, Validators.email]],
+    name: ['', [Validators.required, Validators.minLength(2)]],
+    username: [{ value: '', disabled: true }],
+    email: ['', [Validators.required, Validators.email]],
   });
 
   readonly passwordForm: FormGroup = this.fb.group(
@@ -798,24 +815,64 @@ export class SettingsComponent {
     }
   );
 
+  ngOnInit(): void {
+    // Refresh user profile
+    this.usersService.getMe().subscribe({
+      next: (user) => {
+        this.authService.currentUser.set(user);
+        this.profileForm.patchValue({
+          name: user.name,
+          username: user.username,
+          email: user.email,
+        });
+      },
+      error: () => {
+        const cached = this.currentUser();
+        if (cached) {
+          this.profileForm.patchValue({
+            name: cached.name,
+            username: cached.username,
+            email: cached.email,
+          });
+        }
+      },
+    });
+
+    // Load declined users
+    this.loadDeclinedRequests();
+
+    // Load blocked users
+    this.loadBlockedUsers();
+  }
+
+  loadDeclinedRequests(): void {
+    this.usersService.getDeclinedUsers().subscribe({
+      next: (items) => this.declinedRequests.set(items),
+      error: () => {},
+    });
+  }
+
+  loadBlockedUsers(): void {
+    this.usersService.getBlockedUsers().subscribe({
+      next: (items) => this.blockedUsers.set(items),
+      error: () => {},
+    });
+  }
+
   isInvalid(controlName: string): boolean {
     const ctrl = this.profileForm.get(controlName);
     return !!(ctrl && ctrl.invalid && (ctrl.dirty || ctrl.touched));
   }
 
   isSaveDisabled(): boolean {
-    const isDirty = this.profileForm.dirty || this.photoPreview() !== null;
-    return !isDirty || this.profileForm.invalid || this.isUsernameTaken() || this.isSaving();
-  }
-
-  checkUsername(): void {
-    const val = this.profileForm.get('username')?.value || '';
-    this.isUsernameTaken.set(this.chatService.isUsernameTaken(val));
+    const isDirty = this.profileForm.dirty || this.selectedAvatarFile() !== null;
+    return !isDirty || this.profileForm.invalid || this.isSaving();
   }
 
   onAvatarSelected(event: Event): void {
     const file = (event.target as HTMLInputElement).files?.[0];
     if (file) {
+      this.selectedAvatarFile.set(file);
       const reader = new FileReader();
       reader.onload = () => {
         this.photoPreview.set(reader.result as string);
@@ -826,35 +883,53 @@ export class SettingsComponent {
   }
 
   removePhoto(): void {
-    this.photoPreview.set('');
-    this.chatService.updateCurrentUser({ photoUrl: null });
-    this.profileForm.markAsDirty();
-    this.toast.info('Profile picture removed');
+    this.selectedAvatarFile.set(null);
+    this.photoPreview.set(null);
+    this.usersService.removeAvatar().subscribe({
+      next: (updatedUser) => {
+        this.authService.currentUser.set(updatedUser);
+        this.toast.info('Profile picture removed');
+      },
+      error: (err) => {
+        this.toast.error(err.error?.message || 'Failed to remove photo');
+      },
+    });
   }
 
   discardChanges(): void {
     const u = this.currentUser();
-    this.profileForm.reset({
-      name: u.name,
-      username: u.username,
-      email: u.email,
-    });
+    if (u) {
+      this.profileForm.reset({
+        name: u.name,
+        username: u.username,
+        email: u.email,
+      });
+    }
     this.photoPreview.set(null);
-    this.isUsernameTaken.set(false);
+    this.selectedAvatarFile.set(null);
     this.profileForm.markAsPristine();
   }
 
   onSaveClicked(): void {
     if (this.isSaveDisabled()) return;
 
-    const emailChanged = this.profileForm.get('email')?.dirty &&
-      this.profileForm.get('email')?.value !== this.currentUser().email;
+    const currentEmail = this.currentUser()?.email;
+    const newEmail = this.profileForm.get('email')?.value?.trim();
 
-    if (emailChanged) {
+    if (newEmail && newEmail !== currentEmail) {
+      this.pendingNewEmail.set(newEmail);
       this.emailOtpDigits.set(['', '', '', '', '', '']);
       this.emailOtpError.set('');
-      this.emailModalOpen.set(true);
-      setTimeout(() => this.focusEmailOtp(0), 50);
+
+      this.authService.requestChangeEmailOtp(newEmail).subscribe({
+        next: () => {
+          this.emailModalOpen.set(true);
+          setTimeout(() => this.focusEmailOtp(0), 50);
+        },
+        error: (err) => {
+          this.toast.error(err.error?.message || 'Failed to send verification code');
+        },
+      });
       return;
     }
 
@@ -863,23 +938,34 @@ export class SettingsComponent {
 
   private applyProfileSave(): void {
     this.isSaving.set(true);
-    setTimeout(() => {
-      this.isSaving.set(false);
-      const val = this.profileForm.value;
-      const updateData: any = {
-        name: val.name,
-        username: val.username,
-        email: val.email,
-      };
-      if (this.photoPreview()) {
-        updateData.photoUrl = this.photoPreview();
-      }
+    const val = this.profileForm.value;
+    const avatarFile = this.selectedAvatarFile();
 
-      this.chatService.updateCurrentUser(updateData);
-      this.profileForm.markAsPristine();
-      this.photoPreview.set(null);
-      this.toast.success('Changes saved');
-    }, 500);
+    const updateProfile$ = this.usersService.updateMe({
+      name: val.name,
+    });
+    const uploadAvatar$ = avatarFile ? this.usersService.uploadAvatar(avatarFile) : of(null);
+
+    forkJoin([updateProfile$, uploadAvatar$]).subscribe({
+      next: ([updatedProfile, avatarResult]) => {
+        const finalUser = avatarResult || updatedProfile;
+        this.authService.currentUser.set(finalUser);
+        this.profileForm.patchValue({
+          name: finalUser.name,
+          username: finalUser.username,
+          email: finalUser.email,
+        });
+        this.profileForm.markAsPristine();
+        this.selectedAvatarFile.set(null);
+        this.photoPreview.set(null);
+        this.isSaving.set(false);
+        this.toast.success('Changes saved');
+      },
+      error: (err) => {
+        this.isSaving.set(false);
+        this.toast.error(err.error?.message || 'Failed to save changes');
+      },
+    });
   }
 
   // Email verification OTP handlers
@@ -916,9 +1002,19 @@ export class SettingsComponent {
   }
 
   resendEmailCode(): void {
+    const email = this.pendingNewEmail();
+    if (!email) return;
+
     this.emailOtpDigits.set(['', '', '', '', '', '']);
     this.emailOtpError.set('');
-    this.toast.info('New verification code sent');
+    this.authService.requestChangeEmailOtp(email).subscribe({
+      next: () => {
+        this.toast.info('New verification code sent');
+      },
+      error: (err) => {
+        this.toast.error(err.error?.message || 'Failed to resend code');
+      },
+    });
   }
 
   submitEmailVerification(): void {
@@ -928,23 +1024,49 @@ export class SettingsComponent {
       return;
     }
 
-    this.emailModalOpen.set(false);
-    this.applyProfileSave();
+    this.authService.confirmChangeEmail(this.pendingNewEmail(), code).subscribe({
+      next: (res) => {
+        this.emailModalOpen.set(false);
+        this.toast.success('Email updated successfully');
+        this.applyProfileSave();
+      },
+      error: (err) => {
+        this.emailOtpError.set(err.error?.message || 'Invalid verification code');
+      },
+    });
   }
 
   selectTheme(theme: AppTheme): void {
     this.themeService.setTheme(theme);
+    const mappedTheme = theme === 'default' ? 'system' : theme === 'white' ? 'light' : 'dark';
+    this.usersService.updateMe({ themePreference: mappedTheme }).subscribe({
+      error: () => {},
+    });
     this.toast.info(`Theme set to ${theme}`);
   }
 
-  acceptRequest(id: string, name: string): void {
-    this.chatService.acceptDeclinedRequest(id);
-    this.toast.success(`Accepted request from ${name}`);
+  acceptRequest(conversationId: string, name: string): void {
+    this.conversationsService.acceptConversation(conversationId).subscribe({
+      next: () => {
+        this.declinedRequests.update((list) => list.filter((r) => r.conversationId !== conversationId));
+        this.toast.success(`Accepted request from ${name}`);
+      },
+      error: (err) => {
+        this.toast.error(err.error?.message || `Failed to accept request from ${name}`);
+      },
+    });
   }
 
-  unblockUser(name: string): void {
-    this.chatService.unblockUser(name);
-    this.toast.success(`Unblocked ${name}`);
+  unblockUser(item: BlockedItem): void {
+    this.conversationsService.unblockUser(item.id).subscribe({
+      next: () => {
+        this.blockedUsers.update((list) => list.filter((b) => b.id !== item.id));
+        this.toast.success(`Unblocked ${item.user.name}`);
+      },
+      error: (err) => {
+        this.toast.error(err.error?.message || `Failed to unblock ${item.user.name}`);
+      },
+    });
   }
 
   openPasswordModal(): void {
@@ -962,8 +1084,16 @@ export class SettingsComponent {
       return;
     }
 
-    this.passwordModalOpen.set(false);
-    this.toast.success('Password changed successfully');
+    const { currentPassword, newPassword } = this.passwordForm.value;
+    this.authService.changePassword(currentPassword, newPassword).subscribe({
+      next: () => {
+        this.passwordModalOpen.set(false);
+        this.toast.success('Password changed successfully');
+      },
+      error: (err) => {
+        this.toast.error(err.error?.message || 'Failed to change password');
+      },
+    });
   }
 
   openLogoutModal(): void {
@@ -972,7 +1102,13 @@ export class SettingsComponent {
 
   confirmLogout(): void {
     this.logoutModalOpen.set(false);
-    this.toast.info('Logged out');
-    this.router.navigate(['/login']);
+    this.authService.logout().subscribe({
+      next: () => {
+        this.toast.info('Logged out');
+      },
+      error: () => {
+        this.toast.info('Logged out');
+      },
+    });
   }
 }

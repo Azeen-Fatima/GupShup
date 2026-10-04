@@ -12,7 +12,8 @@ import { FormBuilder, FormGroup, ReactiveFormsModule, Validators } from '@angula
 import { Router, RouterLink } from '@angular/router';
 import { ButtonComponent } from '../../../shared/components/button/button.component';
 import { SvgIconComponent } from '../../../shared/components/svg-icon/svg-icon.component';
-import { ChatService } from '../../../shared/services/chat.service';
+import { AuthService } from '../../../shared/services/auth.service';
+import { UsersService } from '../../../shared/services/users.service';
 import { ToastService } from '../../../shared/services/toast.service';
 
 @Component({
@@ -582,7 +583,8 @@ import { ToastService } from '../../../shared/services/toast.service';
 export class SignupComponent implements OnDestroy {
   private readonly fb = inject(FormBuilder);
   private readonly router = inject(Router);
-  private readonly chatService = inject(ChatService);
+  private readonly authService = inject(AuthService);
+  private readonly usersService = inject(UsersService);
   private readonly toast = inject(ToastService);
 
   @ViewChildren('otpInput') otpInputs!: QueryList<ElementRef<HTMLInputElement>>;
@@ -591,6 +593,8 @@ export class SignupComponent implements OnDestroy {
   readonly otpDigits = signal<string[]>(['', '', '', '', '', '']);
   readonly otpError = signal<string>('');
   readonly photoPreview = signal<string | null>(null);
+  readonly avatarFile = signal<File | null>(null);
+  readonly signupToken = signal<string | null>(null);
   readonly isLoading = signal<boolean>(false);
   readonly resendCountdown = signal<number>(30);
   readonly usernameStatus = signal<'idle' | 'checking' | 'available' | 'taken'>('idle');
@@ -608,7 +612,7 @@ export class SignupComponent implements OnDestroy {
   readonly signupForm: FormGroup = this.fb.group({
     email: ['', [Validators.required, Validators.email]],
     name: ['', [Validators.required, Validators.minLength(2)]],
-    username: ['', [Validators.required, Validators.minLength(3), Validators.pattern(/^@?[a-zA-Z0-9_.]+$/)]],
+    username: ['', [Validators.required, Validators.minLength(3), Validators.pattern(/^@?[a-z0-9_.]+$/i)]],
     password: ['', [Validators.required, Validators.minLength(8)]],
   });
 
@@ -641,13 +645,23 @@ export class SignupComponent implements OnDestroy {
         emailCtrl.markAsTouched();
         return;
       }
+
+      const email = emailCtrl!.value.trim();
       this.isLoading.set(true);
-      setTimeout(() => {
-        this.isLoading.set(false);
-        this.currentStep.set(2);
-        this.startCountdown();
-        setTimeout(() => this.focusOtpBox(0), 50);
-      }, 500);
+
+      this.authService.requestSignupOtp(email).subscribe({
+        next: () => {
+          this.isLoading.set(false);
+          this.currentStep.set(2);
+          this.startCountdown();
+          this.toast.info('Verification code sent to your email');
+          setTimeout(() => this.focusOtpBox(0), 50);
+        },
+        error: (err) => {
+          this.isLoading.set(false);
+          this.toast.error(err?.error?.error?.message || 'Failed to send verification code. Try again.');
+        },
+      });
     }
   }
 
@@ -709,29 +723,43 @@ export class SignupComponent implements OnDestroy {
       return;
     }
 
+    const email = this.signupForm.get('email')!.value.trim();
     this.isLoading.set(true);
-    setTimeout(() => {
-      this.isLoading.set(false);
-      // Demo test: any code except '000000' succeeds
-      if (code === '000000') {
-        this.otpError.set('Invalid code. Please try 123456');
-        return;
-      }
-      this.otpError.set('');
-      this.currentStep.set(3);
-    }, 500);
+
+    this.authService.verifySignupOtp(email, code).subscribe({
+      next: (res) => {
+        this.isLoading.set(false);
+        this.signupToken.set(res.signupToken);
+        this.otpError.set('');
+        this.currentStep.set(3);
+      },
+      error: (err) => {
+        this.isLoading.set(false);
+        this.otpError.set(err?.error?.error?.message || 'Invalid or expired verification code');
+      },
+    });
   }
 
   resendCode(): void {
+    const email = this.signupForm.get('email')!.value.trim();
     this.otpDigits.set(['', '', '', '', '', '']);
     this.otpError.set('');
-    this.startCountdown();
-    this.toast.info('New verification code sent');
+
+    this.authService.requestSignupOtp(email).subscribe({
+      next: () => {
+        this.startCountdown();
+        this.toast.info('New verification code sent');
+      },
+      error: (err) => {
+        this.toast.error(err?.error?.error?.message || 'Failed to resend code');
+      },
+    });
   }
 
   onUsernameChange(): void {
-    const val = this.signupForm.get('username')?.value?.trim();
-    if (!val || val.length < 3) {
+    const raw = this.signupForm.get('username')?.value?.trim() || '';
+    const clean = raw.replace(/^@/, '').toLowerCase();
+    if (!clean || clean.length < 3) {
       this.usernameStatus.set('idle');
       return;
     }
@@ -740,14 +768,21 @@ export class SignupComponent implements OnDestroy {
     if (this.usernameCheckTimer) clearTimeout(this.usernameCheckTimer);
 
     this.usernameCheckTimer = setTimeout(() => {
-      const taken = this.chatService.isUsernameTaken(val);
-      this.usernameStatus.set(taken ? 'taken' : 'available');
+      this.authService.checkUsernameAvailability(clean).subscribe({
+        next: (res) => {
+          this.usernameStatus.set(res.available ? 'available' : 'taken');
+        },
+        error: () => {
+          this.usernameStatus.set('idle');
+        },
+      });
     }, 350);
   }
 
   onFileSelected(event: Event): void {
     const file = (event.target as HTMLInputElement).files?.[0];
     if (file) {
+      this.avatarFile.set(file);
       const reader = new FileReader();
       reader.onload = () => {
         this.photoPreview.set(reader.result as string);
@@ -757,16 +792,7 @@ export class SignupComponent implements OnDestroy {
   }
 
   continueWithGoogle(): void {
-    this.isLoading.set(true);
-    setTimeout(() => {
-      this.isLoading.set(false);
-      this.signupForm.patchValue({
-        email: 'alex.google@example.com',
-        name: 'Alex Google',
-        username: '@alexgoogle',
-      });
-      this.currentStep.set(3);
-    }, 600);
+    this.toast.info('Google sign-in is available when Google Client ID is configured.');
   }
 
   onStepSubmit(): void {
@@ -784,12 +810,52 @@ export class SignupComponent implements OnDestroy {
         return;
       }
 
+      const rawUsername = userCtrl!.value.trim();
+      const cleanUsername = rawUsername.replace(/^@/, '').toLowerCase();
+      const token = this.signupToken();
+
+      if (!token) {
+        this.toast.error('Session expired. Please verify your email again.');
+        this.currentStep.set(1);
+        return;
+      }
+
       this.isLoading.set(true);
-      setTimeout(() => {
-        this.isLoading.set(false);
-        this.toast.success('Account created successfully!');
-        this.router.navigate(['/chats']);
-      }, 700);
+
+      this.authService
+        .completeSignup({
+          signupToken: token,
+          name: nameCtrl!.value.trim(),
+          username: cleanUsername,
+          password: passCtrl!.value,
+        })
+        .subscribe({
+          next: () => {
+            const avatar = this.avatarFile();
+            if (avatar) {
+              this.usersService.uploadAvatar(avatar).subscribe({
+                next: () => {
+                  this.isLoading.set(false);
+                  this.toast.success('Account created successfully!');
+                  this.router.navigate(['/chats']);
+                },
+                error: () => {
+                  this.isLoading.set(false);
+                  this.toast.success('Account created!');
+                  this.router.navigate(['/chats']);
+                },
+              });
+            } else {
+              this.isLoading.set(false);
+              this.toast.success('Account created successfully!');
+              this.router.navigate(['/chats']);
+            }
+          },
+          error: (err) => {
+            this.isLoading.set(false);
+            this.toast.error(err?.error?.error?.message || 'Failed to complete registration');
+          },
+        });
     }
   }
 }

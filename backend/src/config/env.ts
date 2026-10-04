@@ -38,7 +38,7 @@ const envSchema = z.object({
   CLOUDINARY_CLOUD_NAME: z.string().optional().default(''),
   CLOUDINARY_API_KEY: z.string().optional().default(''),
   CLOUDINARY_API_SECRET: z.string().optional().default(''),
-  OTP_TTL_SECONDS: z.coerce.number().default(300),
+  OTP_TTL_SECONDS: z.coerce.number().default(900),
 });
 
 const parsed = envSchema.safeParse(process.env);

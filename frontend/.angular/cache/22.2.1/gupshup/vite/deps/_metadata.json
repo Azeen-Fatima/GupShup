@@ -1,59 +1,81 @@
 {
-  "hash": "4bbad0e2",
-  "configHash": "d84fbc33",
-  "lockfileHash": "5d77a910",
-  "browserHash": "0be3334b",
+  "hash": "2346b7d1",
+  "configHash": "5555f9ae",
+  "lockfileHash": "323548ea",
+  "browserHash": "60948c91",
   "optimized": {
     "@angular/common": {
       "src": "../../../../../../node_modules/@angular/common/fesm2022/common.mjs",
       "file": "@angular_common.js",
-      "fileHash": "efdc4a16",
+      "fileHash": "9c21b6d9",
+      "needsInterop": false
+    },
+    "@angular/common/http": {
+      "src": "../../../../../../node_modules/@angular/common/fesm2022/http.mjs",
+      "file": "@angular_common_http.js",
+      "fileHash": "8f90a4ca",
       "needsInterop": false
     },
     "@angular/core": {
       "src": "../../../../../../node_modules/@angular/core/fesm2022/core.mjs",
       "file": "@angular_core.js",
-      "fileHash": "64d51a5c",
+      "fileHash": "211abd28",
       "needsInterop": false
     },
     "@angular/forms": {
       "src": "../../../../../../node_modules/@angular/forms/fesm2022/forms.mjs",
       "file": "@angular_forms.js",
-      "fileHash": "d17d4fa8",
+      "fileHash": "6d0fc0c6",
       "needsInterop": false
     },
     "@angular/platform-browser": {
       "src": "../../../../../../node_modules/@angular/platform-browser/fesm2022/platform-browser.mjs",
       "file": "@angular_platform-browser.js",
-      "fileHash": "6c4457bc",
+      "fileHash": "cbb7697a",
       "needsInterop": false
     },
     "@angular/router": {
       "src": "../../../../../../node_modules/@angular/router/fesm2022/router.mjs",
       "file": "@angular_router.js",
-      "fileHash": "d76a8ce4",
+      "fileHash": "bc2f5dfa",
+      "needsInterop": false
+    },
+    "rxjs": {
+      "src": "../../../../../../node_modules/rxjs/dist/esm5/index.js",
+      "file": "rxjs.js",
+      "fileHash": "578a7ea6",
+      "needsInterop": false
+    },
+    "socket.io-client": {
+      "src": "../../../../../../node_modules/socket.io-client/build/esm/index.js",
+      "file": "socket__io-client.js",
+      "fileHash": "11807041",
       "needsInterop": false
     }
   },
   "chunks": {
-    "common-By7U3TjW": {
-      "file": "common-By7U3TjW.js",
+    "_xhr-chunk-D_QOsesM": {
+      "file": "_xhr-chunk-D_QOsesM.js",
       "isDynamicEntry": false
     },
-    "core-Dl1ZlCfZ": {
-      "file": "core-Dl1ZlCfZ.js",
+    "common-BOxu8ben": {
+      "file": "common-BOxu8ben.js",
       "isDynamicEntry": false
     },
-    "createObject-D3fkcyp3": {
-      "file": "createObject-D3fkcyp3.js",
+    "core-CABa1ZRZ": {
+      "file": "core-CABa1ZRZ.js",
       "isDynamicEntry": false
     },
-    "from-D1S1dMNA": {
-      "file": "from-D1S1dMNA.js",
+    "esm5-DYNb5pjm": {
+      "file": "esm5-DYNb5pjm.js",
       "isDynamicEntry": false
     },
-    "platform-browser-DZMq-3Mp": {
-      "file": "platform-browser-DZMq-3Mp.js",
+    "http-Brf_r3Wf": {
+      "file": "http-Brf_r3Wf.js",
+      "isDynamicEntry": false
+    },
+    "platform-browser-D6uEv5NI": {
+      "file": "platform-browser-D6uEv5NI.js",
       "isDynamicEntry": false
     }
   }

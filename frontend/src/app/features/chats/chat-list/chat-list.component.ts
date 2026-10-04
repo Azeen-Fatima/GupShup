@@ -2,9 +2,17 @@ import { Component, computed, inject, signal, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router, RouterLink } from '@angular/router';
-import { ChatService } from '../../../shared/services/chat.service';
-import { ChatItem, DiscoverableUser } from '../../../shared/mock/mock-data';
+import { ConversationsService } from '../../../shared/services/conversations.service';
+import { UsersService } from '../../../shared/services/users.service';
+import { AuthService } from '../../../shared/services/auth.service';
+import { SocketService } from '../../../shared/services/socket.service';
 import { ToastService } from '../../../shared/services/toast.service';
+import {
+  formatConversationToChatItem,
+  getInitials,
+  SearchUserResult,
+} from '../../../shared/models/api.models';
+import { ChatItem } from '../../../shared/mock/mock-data';
 import { AvatarComponent } from '../../../shared/components/avatar/avatar.component';
 import { ButtonComponent } from '../../../shared/components/button/button.component';
 import { SvgIconComponent } from '../../../shared/components/svg-icon/svg-icon.component';
@@ -137,6 +145,7 @@ import { EmptyStateComponent } from '../../../shared/components/empty-state/empt
           <input
             type="text"
             [(ngModel)]="sheetSearchQuery"
+            (ngModelChange)="onSheetSearchChange($event)"
             placeholder="Search by name or @username"
             class="sheet-search-input"
             aria-label="Search people"
@@ -165,12 +174,12 @@ import { EmptyStateComponent } from '../../../shared/components/empty-state/empt
               <div class="person-row">
                 <app-avatar
                   [name]="person.name"
-                  [initials]="person.initials"
+                  [photoUrl]="person.avatarUrl"
                   [size]="'md'"
                 ></app-avatar>
                 <div class="person-info">
                   <div class="person-name">{{ person.name }}</div>
-                  <div class="person-user">{{ person.username }}</div>
+                  <div class="person-user">&#64;{{ person.username }}</div>
                 </div>
                 <app-button
                   variant="msg"
@@ -464,13 +473,12 @@ import { EmptyStateComponent } from '../../../shared/components/empty-state/empt
   `],
 })
 export class ChatListComponent implements OnInit {
-  private readonly chatService = inject(ChatService);
+  private readonly conversationsService = inject(ConversationsService);
+  private readonly usersService = inject(UsersService);
+  private readonly authService = inject(AuthService);
+  private readonly socketService = inject(SocketService);
   private readonly router = inject(Router);
   private readonly toast = inject(ToastService);
-
-  readonly currentUser = this.chatService.currentUser;
-  readonly chats = this.chatService.chats;
-  readonly discoverableUsers = this.chatService.discoverableUsers;
 
   readonly searchOpen = signal<boolean>(false);
   readonly searchQuery = signal<string>('');
@@ -478,6 +486,41 @@ export class ChatListComponent implements OnInit {
   readonly sheetSearchQuery = signal<string>('');
   readonly isLoadingChats = signal<boolean>(true);
   readonly isLoadingSheet = signal<boolean>(false);
+  readonly sheetUsers = signal<SearchUserResult[]>([]);
+  private sheetSearchTimer: any = null;
+
+  // Current logged in user computed from authService
+  readonly currentUser = computed(() => {
+    const u = this.authService.currentUser();
+    return {
+      name: u?.name || 'User',
+      username: u?.username ? `@${u.username}` : '',
+      initials: getInitials(u?.name || 'User'),
+      photoUrl: u?.avatarUrl || null,
+    };
+  });
+
+  // Chats list mapped to ChatItem
+  readonly chats = computed(() => {
+    const list = this.conversationsService.conversations();
+    const myId = this.authService.currentUser()?.id;
+    return list.map((c) => formatConversationToChatItem(c, myId));
+  });
+
+  // Filtered chats by search query
+  readonly filteredChats = computed(() => {
+    const q = this.searchQuery().trim().toLowerCase();
+    if (!q) return this.chats();
+    return this.chats().filter(
+      (c) =>
+        c.name.toLowerCase().includes(q) ||
+        c.lastMessage.toLowerCase().includes(q) ||
+        (c.username && c.username.toLowerCase().includes(q))
+    );
+  });
+
+  // Search users in sheet
+  readonly filteredPeople = computed(() => this.sheetUsers());
 
   // Modal dialog state
   readonly modalState = signal<{
@@ -496,32 +539,22 @@ export class ChatListComponent implements OnInit {
     onConfirm: null,
   });
 
-  readonly filteredChats = computed(() => {
-    const q = this.searchQuery().trim().toLowerCase();
-    if (!q) return this.chats();
-    return this.chats().filter(
-      (c) =>
-        c.name.toLowerCase().includes(q) ||
-        c.lastMessage.toLowerCase().includes(q) ||
-        (c.username && c.username.toLowerCase().includes(q))
-    );
-  });
-
-  readonly filteredPeople = computed(() => {
-    const q = this.sheetSearchQuery().trim().toLowerCase();
-    if (!q) return this.discoverableUsers();
-    return this.discoverableUsers().filter(
-      (u) =>
-        u.name.toLowerCase().includes(q) ||
-        u.username.toLowerCase().includes(q)
-    );
-  });
-
   ngOnInit(): void {
-    // Brief skeleton placeholder simulation on load
-    setTimeout(() => {
-      this.isLoadingChats.set(false);
-    }, 400);
+    if (!this.authService.currentUser()) {
+      this.authService.fetchProfile().subscribe({
+        next: () => this.loadChats(),
+        error: () => this.loadChats(),
+      });
+    } else {
+      this.loadChats();
+    }
+  }
+
+  loadChats(): void {
+    this.conversationsService.loadConversations().subscribe({
+      next: () => this.isLoadingChats.set(false),
+      error: () => this.isLoadingChats.set(false),
+    });
   }
 
   toggleSearch(): void {
@@ -533,24 +566,46 @@ export class ChatListComponent implements OnInit {
 
   openSheet(): void {
     this.sheetOpen.set(true);
-    this.isLoadingSheet.set(true);
-    setTimeout(() => {
-      this.isLoadingSheet.set(false);
-    }, 300);
+    this.searchPeople('');
   }
 
   closeSheet(): void {
     this.sheetOpen.set(false);
   }
 
+  onSheetSearchChange(query: string): void {
+    if (this.sheetSearchTimer) clearTimeout(this.sheetSearchTimer);
+    this.sheetSearchTimer = setTimeout(() => {
+      this.searchPeople(query);
+    }, 300);
+  }
+
+  searchPeople(query: string): void {
+    this.isLoadingSheet.set(true);
+    const q = query.trim() || 'a';
+    this.usersService.searchUsers(q).subscribe({
+      next: (users) => {
+        this.sheetUsers.set(users);
+        this.isLoadingSheet.set(false);
+      },
+      error: () => {
+        this.sheetUsers.set([]);
+        this.isLoadingSheet.set(false);
+      },
+    });
+  }
+
   openChat(chat: ChatItem): void {
     this.router.navigate(['/chats', chat.id]);
   }
 
-  messagePerson(person: DiscoverableUser): void {
-    const chatId = this.chatService.startOrOpenChat(person);
+  messagePerson(person: SearchUserResult): void {
     this.sheetOpen.set(false);
-    this.router.navigate(['/chats', chatId]);
+    if (person.conversationId) {
+      this.router.navigate(['/chats', person.conversationId]);
+    } else {
+      this.router.navigate(['/chats', `new-${person.id}`]);
+    }
   }
 
   onRowAction(event: { action: 'delete' | 'block' | 'clear' | 'unblock'; chat: ChatItem }): void {
@@ -560,12 +615,14 @@ export class ChatListComponent implements OnInit {
       this.modalState.set({
         isOpen: true,
         title: 'Delete chat?',
-        message: `Are you sure you want to delete the chat with ${chat.name}? This will remove message history.`,
+        message: `Are you sure you want to delete the chat with ${chat.name}? This will hide it from your chat list until a new message arrives.`,
         confirmText: 'Delete',
         isDanger: true,
         onConfirm: () => {
-          this.chatService.deleteChat(chat.id);
-          this.toast.info(`Deleted chat with ${chat.name}`);
+          this.conversationsService.deleteConversation(chat.id).subscribe({
+            next: () => this.toast.info(`Deleted chat with ${chat.name}`),
+            error: (err) => this.toast.error(err?.error?.error?.message || 'Failed to delete chat'),
+          });
         },
       });
     } else if (action === 'block') {
@@ -576,8 +633,10 @@ export class ChatListComponent implements OnInit {
         confirmText: 'Block',
         isDanger: true,
         onConfirm: () => {
-          this.chatService.blockUser(chat.id);
-          this.toast.info(`Blocked ${chat.name}`);
+          this.conversationsService.blockUser(chat.id).subscribe({
+            next: () => this.toast.info(`Blocked ${chat.name}`),
+            error: (err) => this.toast.error(err?.error?.error?.message || 'Failed to block user'),
+          });
         },
       });
     } else if (action === 'clear') {
@@ -588,13 +647,17 @@ export class ChatListComponent implements OnInit {
         confirmText: 'Clear',
         isDanger: false,
         onConfirm: () => {
-          this.chatService.clearChat(chat.id);
-          this.toast.info(`Cleared conversation with ${chat.name}`);
+          this.conversationsService.clearHistory(chat.id).subscribe({
+            next: () => this.toast.info(`Cleared conversation with ${chat.name}`),
+            error: (err) => this.toast.error(err?.error?.error?.message || 'Failed to clear chat'),
+          });
         },
       });
     } else if (action === 'unblock') {
-      this.chatService.unblockUser(chat.name);
-      this.toast.success(`Unblocked ${chat.name}`);
+      this.conversationsService.unblockUser(chat.id).subscribe({
+        next: () => this.toast.success(`Unblocked ${chat.name}`),
+        error: (err) => this.toast.error(err?.error?.error?.message || 'Failed to unblock user'),
+      });
     }
   }
 
