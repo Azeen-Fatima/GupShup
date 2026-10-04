@@ -1,4 +1,4 @@
-import { Component, input } from '@angular/core';
+import { Component, input, output } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { SvgIconComponent } from '../svg-icon/svg-icon.component';
 import { ChatMessage } from '../../mock/mock-data';
@@ -64,15 +64,32 @@ import { ChatMessage } from '../../mock/mock-data';
 
       <div class="meta-row">
         <span class="time">{{ message().timeString }}</span>
-        @if (message().sender === 'me' && message().status && !isPending()) {
-          @if (message().status === 'seen') {
-            <span class="tick-icon seen" aria-label="Seen">
-              <app-svg-icon name="check2" [size]="15"></app-svg-icon>
+        @if (message().sender === 'me') {
+          @if (message().status === 'pending') {
+            <span class="tick-icon sending" title="Sending" aria-label="Sending">
+              <app-svg-icon name="clock" [size]="12"></app-svg-icon>
             </span>
-          } @else if (message().status === 'sent') {
-            <span class="tick-icon" aria-label="Sent">
-              <app-svg-icon name="check" [size]="15"></app-svg-icon>
-            </span>
+          } @else if (message().status === 'failed') {
+            <button
+              type="button"
+              class="retry-send-btn"
+              (click)="retry.emit(message())"
+              title="Failed - tap to retry"
+              aria-label="Failed - tap to retry"
+            >
+              <app-svg-icon name="alert-circle" [size]="13"></app-svg-icon>
+              <span>Failed · Tap to retry</span>
+            </button>
+          } @else if (message().status && !isPending()) {
+            @if (message().status === 'seen') {
+              <span class="tick-icon seen" aria-label="Seen">
+                <app-svg-icon name="check2" [size]="15"></app-svg-icon>
+              </span>
+            } @else if (message().status === 'sent') {
+              <span class="tick-icon" aria-label="Sent">
+                <app-svg-icon name="check" [size]="15"></app-svg-icon>
+              </span>
+            }
           }
         }
       </div>
@@ -251,10 +268,32 @@ import { ChatMessage } from '../../mock/mock-data';
       &.seen {
         color: var(--teal);
       }
+
+      &.sending {
+        opacity: 0.75;
+      }
+    }
+
+    .retry-send-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      background: none;
+      border: none;
+      padding: 0;
+      color: var(--danger);
+      font-size: 11px;
+      font-weight: 700;
+      cursor: pointer;
+
+      &:hover {
+        text-decoration: underline;
+      }
     }
   `],
 })
 export class BubbleComponent {
   readonly message = input.required<ChatMessage>();
   readonly isPending = input<boolean>(false);
+  readonly retry = output<ChatMessage>();
 }

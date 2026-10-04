@@ -39,7 +39,7 @@ export class AuthService {
   /**
    * Request signup verification code
    */
-  async requestSignupCode(email: string): Promise<{ message: string }> {
+  async requestSignupCode(email: string): Promise<{ message: string; cooldownSeconds?: number }> {
     const normalizedEmail = email.toLowerCase().trim();
 
     const existingUser = await prisma.user.findUnique({
@@ -50,10 +50,10 @@ export class AuthService {
       throw new ConflictError('An account with this email already exists', 'EMAIL_ALREADY_EXISTS');
     }
 
-    const code = await createAndStoreOtp(normalizedEmail, 'signup');
+    const { code, cooldownSeconds } = await createAndStoreOtp(normalizedEmail, 'signup');
     await sendOtpEmail(normalizedEmail, code, 'creating your Gupshup account');
 
-    return { message: 'Verification code sent to your email.' };
+    return { message: 'Verification code sent to your email.', cooldownSeconds };
   }
 
   /**
@@ -258,19 +258,22 @@ export class AuthService {
   /**
    * Forgot password: request code (never reveal whether email exists)
    */
-  async requestForgotPasswordCode(email: string): Promise<{ message: string }> {
+  async requestForgotPasswordCode(email: string): Promise<{ message: string; cooldownSeconds?: number }> {
     const normalizedEmail = email.toLowerCase().trim();
     const user = await prisma.user.findUnique({
       where: { email: normalizedEmail },
     });
 
+    let cooldownSeconds = 30;
     if (user) {
-      const code = await createAndStoreOtp(normalizedEmail, 'forgot_password');
-      await sendOtpEmail(normalizedEmail, code, 'resetting your Gupshup password');
+      const result = await createAndStoreOtp(normalizedEmail, 'forgot_password');
+      cooldownSeconds = result.cooldownSeconds;
+      await sendOtpEmail(normalizedEmail, result.code, 'resetting your Gupshup password');
     }
 
     return {
       message: 'If an account exists with this email, a verification code has been sent.',
+      cooldownSeconds,
     };
   }
 
@@ -357,7 +360,7 @@ export class AuthService {
   /**
    * Change email: request verification code for new email
    */
-  async requestChangeEmailCode(userId: string, newEmail: string): Promise<{ message: string }> {
+  async requestChangeEmailCode(userId: string, newEmail: string): Promise<{ message: string; cooldownSeconds?: number }> {
     const normalizedNewEmail = newEmail.toLowerCase().trim();
 
     const existingUser = await prisma.user.findUnique({
@@ -368,10 +371,10 @@ export class AuthService {
       throw new ConflictError('This email is already in use by another account', 'EMAIL_TAKEN');
     }
 
-    const code = await createAndStoreOtp(normalizedNewEmail, 'change_email');
+    const { code, cooldownSeconds } = await createAndStoreOtp(normalizedNewEmail, 'change_email');
     await sendOtpEmail(normalizedNewEmail, code, 'updating your Gupshup email address');
 
-    return { message: `Verification code sent to ${normalizedNewEmail}` };
+    return { message: `Verification code sent to ${normalizedNewEmail}`, cooldownSeconds };
   }
 
   /**

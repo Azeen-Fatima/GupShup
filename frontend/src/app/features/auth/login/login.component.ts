@@ -70,6 +70,7 @@ import { AuthService } from '../../../shared/services/auth.service';
             variant="primary"
             [fullWidth]="true"
             [loading]="isLoading()"
+            [disabled]="isLoading()"
           >
             Log in
           </app-button>
@@ -324,6 +325,8 @@ export class LoginComponent {
   }
 
   onSubmit(): void {
+    if (this.isLoading()) return;
+
     if (this.loginForm.invalid) {
       this.loginForm.markAllAsTouched();
       return;

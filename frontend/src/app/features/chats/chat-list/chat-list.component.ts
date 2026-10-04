@@ -48,9 +48,9 @@ import { EmptyStateComponent } from '../../../shared/components/empty-state/empt
           role="button"
         >
           <app-avatar
+            [avatarUrl]="currentUser().photoUrl"
             [name]="currentUser().name"
             [initials]="currentUser().initials"
-            [photoUrl]="currentUser().photoUrl"
             [size]="'sm'"
           ></app-avatar>
         </a>
@@ -173,8 +173,8 @@ import { EmptyStateComponent } from '../../../shared/components/empty-state/empt
             @for (person of filteredPeople(); track person.id) {
               <div class="person-row">
                 <app-avatar
+                  [avatarUrl]="person.avatarUrl"
                   [name]="person.name"
-                  [photoUrl]="person.avatarUrl"
                   [size]="'md'"
                 ></app-avatar>
                 <div class="person-info">
@@ -503,8 +503,10 @@ export class ChatListComponent implements OnInit {
   // Chats list mapped to ChatItem
   readonly chats = computed(() => {
     const list = this.conversationsService.conversations();
-    const myId = this.authService.currentUser()?.id;
-    return list.map((c) => formatConversationToChatItem(c, myId));
+    const myUser = this.authService.currentUser();
+    const myId = myUser?.id;
+    const myAvatar = myUser?.avatarUrl;
+    return list.map((c) => formatConversationToChatItem(c, myId, myAvatar));
   });
 
   // Filtered chats by search query

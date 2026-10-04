@@ -256,4 +256,34 @@ export class ConversationsService {
       })
     );
   }
+
+  /**
+   * Real-time update: User profile updated (name, avatar, bio, statusMessage)
+   */
+  updateUserProfile(data: {
+    id: string;
+    name: string;
+    avatarUrl: string | null;
+    bio?: string | null;
+    statusMessage?: string | null;
+  }): void {
+    this.conversations.update((list) =>
+      list.map((c) => {
+        if (c.otherUser?.id === data.id) {
+          return {
+            ...c,
+            otherUser: {
+              ...c.otherUser,
+              name: data.name,
+              avatarUrl: data.avatarUrl,
+              bio: data.bio !== undefined ? data.bio : c.otherUser.bio,
+              statusMessage:
+                data.statusMessage !== undefined ? data.statusMessage : c.otherUser.statusMessage,
+            },
+          };
+        }
+        return c;
+      })
+    );
+  }
 }

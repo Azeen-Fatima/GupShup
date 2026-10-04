@@ -411,6 +411,16 @@ export class ConversationsService {
         attachmentSize,
         attachmentMime,
       },
+      include: {
+        sender: {
+          select: {
+            id: true,
+            name: true,
+            username: true,
+            avatarUrl: true,
+          },
+        },
+      },
     });
 
     // Update conversation lastMessageAt and unhide for members

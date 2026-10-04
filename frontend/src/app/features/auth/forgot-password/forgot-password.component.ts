@@ -77,6 +77,7 @@ import { AuthService } from '../../../shared/services/auth.service';
                 variant="primary"
                 [fullWidth]="true"
                 [loading]="isLoading()"
+                [disabled]="isLoading()"
               >
                 Send verification code
               </app-button>
@@ -112,7 +113,12 @@ import { AuthService } from '../../../shared/services/auth.service';
                   @if (resendCountdown() > 0) {
                     <span class="countdown-text">Resend code in {{ resendCountdown() }}s</span>
                   } @else {
-                    <button type="button" class="link-btn" (click)="resendCode()">
+                    <button
+                      type="button"
+                      class="link-btn"
+                      (click)="resendCode()"
+                      [disabled]="isLoading()"
+                    >
                       Resend code
                     </button>
                   }
@@ -125,6 +131,7 @@ import { AuthService } from '../../../shared/services/auth.service';
                   variant="primary"
                   [fullWidth]="true"
                   [loading]="isLoading()"
+                  [disabled]="isLoading()"
                   (clicked)="verifyCode()"
                 >
                   Verify code
@@ -181,6 +188,7 @@ import { AuthService } from '../../../shared/services/auth.service';
                 variant="primary"
                 [fullWidth]="true"
                 [loading]="isLoading()"
+                [disabled]="isLoading()"
               >
                 Reset password
               </app-button>
@@ -468,11 +476,11 @@ export class ForgotPasswordComponent implements OnDestroy {
     this.currentStep.set(step);
   }
 
-  startCountdown(): void {
+  startCountdown(seconds = 30): void {
     if (this.countdownTimer) {
       clearInterval(this.countdownTimer);
     }
-    this.resendCountdown.set(30);
+    this.resendCountdown.set(seconds);
     this.countdownTimer = setInterval(() => {
       if (this.resendCountdown() > 0) {
         this.resendCountdown.update((c) => c - 1);
@@ -530,22 +538,33 @@ export class ForgotPasswordComponent implements OnDestroy {
   }
 
   resendCode(): void {
+    if (this.isLoading() || this.resendCountdown() > 0) return;
+
     const email = this.forgotForm.get('email')!.value.trim();
     this.otpDigits.set(['', '', '', '', '', '']);
     this.otpError.set('');
+    this.isLoading.set(true);
 
     this.authService.requestForgotPasswordOtp(email).subscribe({
-      next: () => {
-        this.startCountdown();
+      next: (res) => {
+        this.isLoading.set(false);
+        this.startCountdown(res?.cooldownSeconds || 30);
         this.toast.info('New verification code sent');
       },
       error: (err) => {
-        this.toast.error(err?.error?.error?.message || 'Failed to resend code');
+        this.isLoading.set(false);
+        const retryAfter = err?.error?.retryAfterSeconds || err?.error?.error?.retryAfterSeconds;
+        if (retryAfter) {
+          this.startCountdown(retryAfter);
+        }
+        this.toast.error(err?.error?.error?.message || err?.error?.message || 'Failed to resend code');
       },
     });
   }
 
   verifyCode(): void {
+    if (this.isLoading()) return;
+
     const code = this.otpDigits().join('');
     if (code.length < 6) {
       this.otpError.set('Please enter all 6 digits');
@@ -564,12 +583,14 @@ export class ForgotPasswordComponent implements OnDestroy {
       },
       error: (err) => {
         this.isLoading.set(false);
-        this.otpError.set(err?.error?.error?.message || 'Invalid or expired verification code');
+        this.otpError.set(err?.error?.error?.message || err?.error?.message || 'Invalid or expired verification code');
       },
     });
   }
 
   onFormSubmit(): void {
+    if (this.isLoading()) return;
+
     if (this.currentStep() === 1) {
       const emailCtrl = this.forgotForm.get('email');
       if (emailCtrl?.invalid) {
@@ -581,16 +602,20 @@ export class ForgotPasswordComponent implements OnDestroy {
       this.isLoading.set(true);
 
       this.authService.requestForgotPasswordOtp(email).subscribe({
-        next: () => {
+        next: (res) => {
           this.isLoading.set(false);
           this.currentStep.set(2);
-          this.startCountdown();
+          this.startCountdown(res?.cooldownSeconds || 30);
           this.toast.info('Verification code sent to your email');
           setTimeout(() => this.focusOtpBox(0), 50);
         },
         error: (err) => {
           this.isLoading.set(false);
-          this.toast.error(err?.error?.error?.message || 'Failed to send verification code');
+          const retryAfter = err?.error?.retryAfterSeconds || err?.error?.error?.retryAfterSeconds;
+          if (retryAfter) {
+            this.startCountdown(retryAfter);
+          }
+          this.toast.error(err?.error?.error?.message || err?.error?.message || 'Failed to send verification code');
         },
       });
     } else if (this.currentStep() === 3) {
@@ -617,7 +642,7 @@ export class ForgotPasswordComponent implements OnDestroy {
         },
         error: (err) => {
           this.isLoading.set(false);
-          this.toast.error(err?.error?.error?.message || 'Failed to reset password');
+          this.toast.error(err?.error?.error?.message || err?.error?.message || 'Failed to reset password');
         },
       });
     }

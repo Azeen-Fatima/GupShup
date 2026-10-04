@@ -7,24 +7,30 @@ declare global {
   var __prisma: PrismaClient | undefined;
 }
 
+const logOptions: Array<{ emit: 'event'; level: 'query' | 'warn' | 'error' }> = [
+  { emit: 'event', level: 'warn' },
+  { emit: 'event', level: 'error' },
+];
+
+if (env.PRISMA_LOG_QUERIES) {
+  logOptions.push({ emit: 'event', level: 'query' });
+}
+
 export const prisma =
   global.__prisma ||
   new PrismaClient({
-    log:
-      env.NODE_ENV === 'development'
-        ? [
-            { emit: 'event', level: 'query' },
-            { emit: 'event', level: 'error' },
-            { emit: 'event', level: 'warn' },
-          ]
-        : [{ emit: 'event', level: 'error' }],
+    log: logOptions,
   });
 
-if (env.NODE_ENV === 'development') {
+if (env.PRISMA_LOG_QUERIES) {
   (prisma as any).$on?.('query', (e: any) => {
     logger.debug({ query: e.query, params: e.params, duration: `${e.duration}ms` }, 'Prisma Query');
   });
 }
+
+(prisma as any).$on?.('warn', (e: any) => {
+  logger.warn({ warning: e.message }, 'Prisma Warning');
+});
 
 (prisma as any).$on?.('error', (e: any) => {
   logger.error({ error: e.message }, 'Prisma Error');

@@ -24,7 +24,7 @@ export interface ChatMessage {
   sender: 'me' | 'them';
   timestamp: string;
   timeString: string;
-  status?: 'sent' | 'seen' | 'pending';
+  status?: 'sent' | 'seen' | 'pending' | 'failed';
   attachment?: MessageAttachment;
   isFirstUnread?: boolean;
 }
@@ -38,7 +38,7 @@ export interface ChatItem {
   lastMessage: string;
   time: string;
   unreadCount: number;
-  status?: 'sent' | 'seen' | 'pending';
+  status?: 'sent' | 'seen' | 'pending' | 'failed';
   isDeclined?: boolean;
   isBlocked?: boolean;
   isPendingRequest?: boolean;   // Sender side (waiting for recipient to accept)

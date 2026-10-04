@@ -162,7 +162,8 @@ export function formatTime(iso?: string): string {
 
 export function formatConversationToChatItem(
   conv: ConversationItem,
-  currentUserId?: string
+  currentUserId?: string,
+  currentUserAvatarUrl?: string | null
 ) {
   const isMe = conv.isSelf;
   const name = isMe ? `${conv.otherUser.name} (Notes to Self)` : conv.otherUser.name;
@@ -196,7 +197,7 @@ export function formatConversationToChatItem(
     isPendingRequest,
     isIncomingRequest,
     isSelfNotes: isMe,
-    photoUrl: conv.otherUser.avatarUrl,
+    photoUrl: (isMe && currentUserAvatarUrl) ? currentUserAvatarUrl : (conv.otherUser.avatarUrl || null),
   };
 }
 

@@ -10,6 +10,8 @@ import {
 import { CommonModule } from '@angular/common';
 import { FormBuilder, FormGroup, ReactiveFormsModule, Validators } from '@angular/forms';
 import { Router, RouterLink } from '@angular/router';
+import { Subject, Subscription, of } from 'rxjs';
+import { catchError, debounceTime, distinctUntilChanged, switchMap } from 'rxjs/operators';
 import { ButtonComponent } from '../../../shared/components/button/button.component';
 import { SvgIconComponent } from '../../../shared/components/svg-icon/svg-icon.component';
 import { AuthService } from '../../../shared/services/auth.service';
@@ -78,6 +80,7 @@ import { ToastService } from '../../../shared/services/toast.service';
                 variant="primary"
                 [fullWidth]="true"
                 [loading]="isLoading()"
+                [disabled]="isLoading()"
               >
                 Continue
               </app-button>
@@ -129,7 +132,12 @@ import { ToastService } from '../../../shared/services/toast.service';
                   @if (resendCountdown() > 0) {
                     <span class="countdown-text">Resend code in {{ resendCountdown() }}s</span>
                   } @else {
-                    <button type="button" class="link-btn" (click)="resendCode()">
+                    <button
+                      type="button"
+                      class="link-btn"
+                      (click)="resendCode()"
+                      [disabled]="isLoading()"
+                    >
                       Resend code
                     </button>
                   }
@@ -142,6 +150,7 @@ import { ToastService } from '../../../shared/services/toast.service';
                   variant="primary"
                   [fullWidth]="true"
                   [loading]="isLoading()"
+                  [disabled]="isLoading()"
                   (clicked)="verifyOtp()"
                 >
                   Verify &amp; continue
@@ -209,18 +218,20 @@ import { ToastService } from '../../../shared/services/toast.service';
                   formControlName="username"
                   placeholder="@azeen"
                   class="auth-input"
-                  [class.invalid]="isInvalid('username') || usernameStatus() === 'taken'"
+                  [class.invalid]="usernameLocalError() || isInvalid('username') || usernameStatus() === 'taken'"
                   autocomplete="username"
                   (input)="onUsernameChange()"
                 />
-                @if (usernameStatus() === 'checking') {
+                @if (usernameLocalError()) {
+                  <span class="error-msg">{{ usernameLocalError() }}</span>
+                } @else if (usernameStatus() === 'checking') {
                   <span class="status-msg info">Checking availability…</span>
                 } @else if (usernameStatus() === 'taken') {
                   <span class="error-msg">Username already taken</span>
                 } @else if (usernameStatus() === 'available') {
                   <span class="status-msg success">✓ Username is available</span>
                 } @else if (isInvalid('username')) {
-                  <span class="error-msg">Username is required (min 3 alphanumeric characters)</span>
+                  <span class="error-msg">Username is required (3-20 characters, letters, numbers, underscore)</span>
                 }
               </div>
 
@@ -245,6 +256,7 @@ import { ToastService } from '../../../shared/services/toast.service';
                 variant="primary"
                 [fullWidth]="true"
                 [loading]="isLoading()"
+                [disabled]="isLoading()"
               >
                 Create account
               </app-button>
@@ -598,9 +610,11 @@ export class SignupComponent implements OnDestroy {
   readonly isLoading = signal<boolean>(false);
   readonly resendCountdown = signal<number>(30);
   readonly usernameStatus = signal<'idle' | 'checking' | 'available' | 'taken'>('idle');
+  readonly usernameLocalError = signal<string>('');
 
   private countdownTimer: any = null;
-  private usernameCheckTimer: any = null;
+  private readonly usernameSubject$ = new Subject<string>();
+  private usernameSub?: Subscription;
 
   readonly stepTitles = ['Join Gupshup', 'Check your email', 'Set up your profile'];
   readonly stepSubtitles = [
@@ -612,13 +626,34 @@ export class SignupComponent implements OnDestroy {
   readonly signupForm: FormGroup = this.fb.group({
     email: ['', [Validators.required, Validators.email]],
     name: ['', [Validators.required, Validators.minLength(2)]],
-    username: ['', [Validators.required, Validators.minLength(3), Validators.pattern(/^@?[a-z0-9_.]+$/i)]],
+    username: ['', [Validators.required, Validators.minLength(3), Validators.maxLength(20), Validators.pattern(/^[a-z0-9_]+$/)]],
     password: ['', [Validators.required, Validators.minLength(8)]],
   });
 
+  constructor() {
+    this.usernameSub = this.usernameSubject$
+      .pipe(
+        debounceTime(350),
+        distinctUntilChanged(),
+        switchMap((clean) => {
+          this.usernameStatus.set('checking');
+          return this.authService.checkUsernameAvailability(clean).pipe(
+            catchError(() => of({ available: false, username: clean }))
+          );
+        })
+      )
+      .subscribe((res) => {
+        const raw = this.signupForm.get('username')?.value || '';
+        const currentClean = raw.replace(/^@/, '').toLowerCase();
+        if (currentClean === res.username) {
+          this.usernameStatus.set(res.available ? 'available' : 'taken');
+        }
+      });
+  }
+
   ngOnDestroy(): void {
     if (this.countdownTimer) clearInterval(this.countdownTimer);
-    if (this.usernameCheckTimer) clearTimeout(this.usernameCheckTimer);
+    if (this.usernameSub) this.usernameSub.unsubscribe();
   }
 
   isInvalid(controlName: string): boolean {
@@ -626,9 +661,9 @@ export class SignupComponent implements OnDestroy {
     return !!(ctrl && ctrl.invalid && (ctrl.dirty || ctrl.touched));
   }
 
-  startCountdown(): void {
+  startCountdown(seconds = 30): void {
     if (this.countdownTimer) clearInterval(this.countdownTimer);
-    this.resendCountdown.set(30);
+    this.resendCountdown.set(seconds);
     this.countdownTimer = setInterval(() => {
       if (this.resendCountdown() > 0) {
         this.resendCountdown.update((c) => c - 1);
@@ -639,6 +674,8 @@ export class SignupComponent implements OnDestroy {
   }
 
   nextStep(): void {
+    if (this.isLoading()) return;
+
     if (this.currentStep() === 1) {
       const emailCtrl = this.signupForm.get('email');
       if (emailCtrl?.invalid) {
@@ -650,16 +687,20 @@ export class SignupComponent implements OnDestroy {
       this.isLoading.set(true);
 
       this.authService.requestSignupOtp(email).subscribe({
-        next: () => {
+        next: (res) => {
           this.isLoading.set(false);
           this.currentStep.set(2);
-          this.startCountdown();
+          this.startCountdown(res?.cooldownSeconds || 30);
           this.toast.info('Verification code sent to your email');
           setTimeout(() => this.focusOtpBox(0), 50);
         },
         error: (err) => {
           this.isLoading.set(false);
-          this.toast.error(err?.error?.error?.message || 'Failed to send verification code. Try again.');
+          const retryAfter = err?.error?.retryAfterSeconds || err?.error?.error?.retryAfterSeconds;
+          if (retryAfter) {
+            this.startCountdown(retryAfter);
+          }
+          this.toast.error(err?.error?.error?.message || err?.error?.message || 'Failed to send verification code. Try again.');
         },
       });
     }
@@ -717,6 +758,8 @@ export class SignupComponent implements OnDestroy {
   }
 
   verifyOtp(): void {
+    if (this.isLoading()) return;
+
     const code = this.otpDigits().join('');
     if (code.length < 6) {
       this.otpError.set('Please enter all 6 digits');
@@ -732,51 +775,74 @@ export class SignupComponent implements OnDestroy {
         this.signupToken.set(res.signupToken);
         this.otpError.set('');
         this.currentStep.set(3);
+        // A2: Start empty
+        this.signupForm.get('username')?.setValue('', { emitEvent: false });
+        this.usernameStatus.set('idle');
+        this.usernameLocalError.set('');
       },
       error: (err) => {
         this.isLoading.set(false);
-        this.otpError.set(err?.error?.error?.message || 'Invalid or expired verification code');
+        this.otpError.set(err?.error?.error?.message || err?.error?.message || 'Invalid or expired verification code');
       },
     });
   }
 
   resendCode(): void {
+    if (this.isLoading() || this.resendCountdown() > 0) return;
+
     const email = this.signupForm.get('email')!.value.trim();
     this.otpDigits.set(['', '', '', '', '', '']);
     this.otpError.set('');
+    this.isLoading.set(true);
 
     this.authService.requestSignupOtp(email).subscribe({
-      next: () => {
-        this.startCountdown();
+      next: (res) => {
+        this.isLoading.set(false);
+        this.startCountdown(res?.cooldownSeconds || 30);
         this.toast.info('New verification code sent');
       },
       error: (err) => {
-        this.toast.error(err?.error?.error?.message || 'Failed to resend code');
+        this.isLoading.set(false);
+        const retryAfter = err?.error?.retryAfterSeconds || err?.error?.error?.retryAfterSeconds;
+        if (retryAfter) {
+          this.startCountdown(retryAfter);
+        }
+        this.toast.error(err?.error?.error?.message || err?.error?.message || 'Failed to resend code');
       },
     });
   }
 
   onUsernameChange(): void {
-    const raw = this.signupForm.get('username')?.value?.trim() || '';
+    // A1: On every keystroke, reset the old availability status immediately
+    this.usernameStatus.set('idle');
+    this.usernameLocalError.set('');
+
+    const ctrl = this.signupForm.get('username');
+    const raw = ctrl?.value || '';
     const clean = raw.replace(/^@/, '').toLowerCase();
-    if (!clean || clean.length < 3) {
-      this.usernameStatus.set('idle');
+
+    if (raw !== clean) {
+      ctrl?.setValue(clean, { emitEvent: false });
+    }
+
+    if (!clean) {
       return;
     }
 
-    this.usernameStatus.set('checking');
-    if (this.usernameCheckTimer) clearTimeout(this.usernameCheckTimer);
+    // A1: Validate locally first: only a-z, 0-9, underscore
+    if (!/^[a-z0-9_]+$/.test(clean)) {
+      this.usernameLocalError.set('Only letters, numbers and underscore allowed');
+      return;
+    }
 
-    this.usernameCheckTimer = setTimeout(() => {
-      this.authService.checkUsernameAvailability(clean).subscribe({
-        next: (res) => {
-          this.usernameStatus.set(res.available ? 'available' : 'taken');
-        },
-        error: () => {
-          this.usernameStatus.set('idle');
-        },
-      });
-    }, 350);
+    // A1: 3-20 chars
+    if (clean.length < 3 || clean.length > 20) {
+      this.usernameLocalError.set('Username must be between 3 and 20 characters');
+      return;
+    }
+
+    // Valid locally! Call debounced API
+    this.usernameSubject$.next(clean);
   }
 
   onFileSelected(event: Event): void {
@@ -799,14 +865,31 @@ export class SignupComponent implements OnDestroy {
     if (this.currentStep() === 1) {
       this.nextStep();
     } else if (this.currentStep() === 3) {
+      if (this.isLoading()) return;
+
       const nameCtrl = this.signupForm.get('name');
       const userCtrl = this.signupForm.get('username');
       const passCtrl = this.signupForm.get('password');
 
-      if (this.signupForm.invalid || this.usernameStatus() === 'taken') {
-        nameCtrl?.markAsTouched();
-        userCtrl?.markAsTouched();
-        passCtrl?.markAsTouched();
+      // Re-validate locally
+      this.onUsernameChange();
+
+      // A3: If invalid, mark all fields touched, show errors and focus first invalid field
+      if (
+        this.signupForm.invalid ||
+        this.usernameLocalError() ||
+        this.usernameStatus() === 'taken' ||
+        this.usernameStatus() === 'checking'
+      ) {
+        this.signupForm.markAllAsTouched();
+
+        if (nameCtrl?.invalid) {
+          document.getElementById('nameInput')?.focus();
+        } else if (userCtrl?.invalid || this.usernameLocalError() || this.usernameStatus() === 'taken') {
+          document.getElementById('usernameInput')?.focus();
+        } else if (passCtrl?.invalid) {
+          document.getElementById('passwordInput')?.focus();
+        }
         return;
       }
 
@@ -853,7 +936,25 @@ export class SignupComponent implements OnDestroy {
           },
           error: (err) => {
             this.isLoading.set(false);
-            this.toast.error(err?.error?.error?.message || 'Failed to complete registration');
+            const status = err.status;
+            const msg = err?.error?.error?.message || err?.error?.message || '';
+            const code = err?.error?.error?.code || '';
+
+            if (status === 409) {
+              if (code === 'USERNAME_TAKEN' || msg.toLowerCase().includes('username')) {
+                this.usernameStatus.set('taken');
+                document.getElementById('usernameInput')?.focus();
+                this.toast.error('Username already taken. Please choose another.');
+              } else {
+                this.toast.error('An account with this email already exists.');
+              }
+            } else if (status === 400) {
+              this.toast.error(msg || 'Invalid registration details. Please check the fields.');
+            } else if (status >= 500) {
+              this.toast.error('Server error occurred. Please try again later.');
+            } else {
+              this.toast.error(msg || 'Failed to complete registration');
+            }
           },
         });
     }

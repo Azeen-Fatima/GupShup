@@ -1,4 +1,4 @@
-import { Component, input, computed } from '@angular/core';
+import { Component, input, computed, signal, effect } from '@angular/core';
 
 export type AvatarSize = 'sm' | 'md' | 'lg' | 'xl';
 
@@ -12,15 +12,20 @@ export type AvatarSize = 'sm' | 'md' | 'lg' | 'xl';
       [class.size-md]="size() === 'md'"
       [class.size-lg]="size() === 'lg'"
       [class.size-xl]="size() === 'xl'"
-      [class.online]="isOnline()"
+      [class.online]="hasOnlineDot()"
       [attr.aria-label]="name() || 'User avatar'"
     >
-      @if (photoUrl()) {
-        <img [src]="photoUrl()!" [alt]="name() || 'Avatar'" class="avatar-img" />
+      @if (resolvedAvatarUrl() && !imgFailed()) {
+        <img
+          [src]="resolvedAvatarUrl()!"
+          [alt]="name() || 'Avatar'"
+          class="avatar-img"
+          (error)="onImgError()"
+        />
       } @else {
         <span class="initials">{{ displayInitials() }}</span>
       }
-      @if (isOnline()) {
+      @if (hasOnlineDot()) {
         <span class="status-dot" aria-label="Online"></span>
       }
     </div>
@@ -101,11 +106,48 @@ export type AvatarSize = 'sm' | 'md' | 'lg' | 'xl';
   `],
 })
 export class AvatarComponent {
+  readonly avatarUrl = input<string | null | undefined>(null);
+  readonly photoUrl = input<string | null | undefined>(null); // Compatibility alias
   readonly name = input<string>('');
   readonly initials = input<string>('');
   readonly size = input<AvatarSize>('md');
-  readonly isOnline = input<boolean>(false);
-  readonly photoUrl = input<string | null>(null);
+  readonly showOnlineDot = input<boolean>(false);
+  readonly isOnline = input<boolean>(false); // Compatibility alias
+
+  readonly imgFailed = signal<boolean>(false);
+
+  constructor() {
+    // Reset image error state whenever avatar URL changes
+    effect(() => {
+      this.avatarUrl();
+      this.photoUrl();
+      this.imgFailed.set(false);
+    });
+  }
+
+  protected readonly hasOnlineDot = computed(() => {
+    return this.showOnlineDot() || this.isOnline();
+  });
+
+  protected readonly resolvedAvatarUrl = computed(() => {
+    const raw = this.avatarUrl() || this.photoUrl();
+    if (!raw) return null;
+
+    // Cloudinary transformation for avatars
+    if (raw.includes('cloudinary.com') && raw.includes('/image/upload/')) {
+      const transform =
+        this.size() === 'xl'
+          ? 'w_512,h_512,c_fill,g_face,q_auto,f_auto'
+          : 'w_128,h_128,c_fill,g_face,q_auto,f_auto';
+
+      if (raw.includes('/image/upload/w_')) {
+        return raw.replace(/\/image\/upload\/w_[^/]+\//, `/image/upload/${transform}/`);
+      }
+      return raw.replace('/image/upload/', `/image/upload/${transform}/`);
+    }
+
+    return raw;
+  });
 
   protected readonly displayInitials = computed(() => {
     if (this.initials()) {
@@ -119,4 +161,8 @@ export class AvatarComponent {
     }
     return n.slice(0, 2).toUpperCase();
   });
+
+  onImgError(): void {
+    this.imgFailed.set(true);
+  }
 }

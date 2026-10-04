@@ -7,9 +7,11 @@ import {
   signal,
   effect,
   HostListener,
+  OnDestroy,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { HttpErrorResponse } from '@angular/common/http';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { Subscription } from 'rxjs';
 import { ConversationsService } from '../../../shared/services/conversations.service';
@@ -24,6 +26,7 @@ import {
   getInitials,
 } from '../../../shared/models/api.models';
 import { ChatItem, ChatMessage, MessageAttachment } from '../../../shared/mock/mock-data';
+import { processChatImage } from '../../../shared/utils/image-processor';
 import { AvatarComponent } from '../../../shared/components/avatar/avatar.component';
 import { SvgIconComponent } from '../../../shared/components/svg-icon/svg-icon.component';
 import { BubbleComponent } from '../../../shared/components/bubble/bubble.component';
@@ -55,10 +58,11 @@ import { EmptyStateComponent } from '../../../shared/components/empty-state/empt
 
         @if (chat()) {
           <app-avatar
+            [avatarUrl]="chat()!.photoUrl"
             [name]="chat()!.name"
             [initials]="chat()!.initials"
             [size]="'md'"
-            [isOnline]="chat()!.isOnline"
+            [showOnlineDot]="chat()!.isOnline"
           ></app-avatar>
 
           <div class="chat-meta">
@@ -110,7 +114,15 @@ import { EmptyStateComponent } from '../../../shared/components/empty-state/empt
 
       <!-- Message History Area -->
       <div #messageContainer class="chat-body" (scroll)="onScroll($event)" role="log" aria-live="polite">
-        @if (messages().length === 0) {
+        @if (loadError() === 'error') {
+          <div class="chat-error-banner" role="alert">
+            <app-svg-icon name="wifi-off" [size]="28"></app-svg-icon>
+            <p class="error-msg">Something went wrong. Tap to retry.</p>
+            <button type="button" class="retry-load-btn" (click)="retryLoadConversation()">
+              Retry
+            </button>
+          </div>
+        } @else if (messages().length === 0) {
           <div class="chat-messages-content empty">
             <app-empty-state
               type="no-messages"
@@ -129,6 +141,7 @@ import { EmptyStateComponent } from '../../../shared/components/empty-state/empt
               <app-bubble
                 [message]="msg"
                 [isPending]="chat()?.isPendingRequest || false"
+                (retry)="retrySendMessage($event)"
               ></app-bubble>
             }
 
@@ -499,6 +512,41 @@ import { EmptyStateComponent } from '../../../shared/components/empty-state/empt
 
       &.empty {
         margin: auto 0;
+      }
+    }
+
+    .chat-error-banner {
+      margin: auto;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      padding: 24px;
+      text-align: center;
+      color: var(--muted);
+
+      .error-msg {
+        font-size: 13.5px;
+        font-weight: 700;
+        color: var(--ink);
+        margin: 0;
+      }
+
+      .retry-load-btn {
+        background-color: var(--amber);
+        color: var(--on-amber);
+        border: none;
+        border-radius: 999px;
+        padding: 7px 22px;
+        font-size: 12.5px;
+        font-weight: 800;
+        cursor: pointer;
+        transition: transform 0.15s ease;
+
+        &:hover {
+          transform: scale(1.04);
+        }
       }
     }
 
@@ -889,7 +937,7 @@ import { EmptyStateComponent } from '../../../shared/components/empty-state/empt
     }
   `],
 })
-export class ChatDetailComponent {
+export class ChatDetailComponent implements OnDestroy {
   private readonly route = inject(ActivatedRoute);
   private readonly router = inject(Router);
   private readonly conversationsService = inject(ConversationsService);
@@ -908,6 +956,7 @@ export class ChatDetailComponent {
   readonly inputText = signal<string>('');
   readonly isTyping = signal<boolean>(false);
   readonly showScrollBottomBtn = signal<boolean>(false);
+  readonly loadError = signal<'not_found' | 'error' | null>(null);
 
   readonly headerMenuOpen = signal<boolean>(false);
   readonly attachMenuOpen = signal<boolean>(false);
@@ -950,6 +999,7 @@ export class ChatDetailComponent {
         this.pendingAttachmentFile.set(null);
         this.emojiPickerOpen.set(false);
         this.isTyping.set(false);
+        this.loadError.set(null);
 
         if (id.startsWith('new-')) {
           this.setupDraftChat(id.replace('new-', ''));
@@ -986,17 +1036,24 @@ export class ChatDetailComponent {
     });
   }
 
-  private loadConversation(id: string): void {
+  loadConversation(id: string): void {
+    this.loadError.set(null);
     const myId = this.authService.currentUser()?.id;
+    const myAvatar = this.authService.currentUser()?.avatarUrl;
 
     // Load conversation metadata
     this.conversationsService.getConversationById(id).subscribe({
       next: (conv) => {
-        this.chat.set(formatConversationToChatItem(conv, myId));
+        this.chat.set(formatConversationToChatItem(conv, myId, myAvatar));
       },
-      error: () => {
-        this.toast.error('Conversation not found');
-        this.router.navigate(['/chats']);
+      error: (err: HttpErrorResponse) => {
+        if (err?.status === 404) {
+          this.loadError.set('not_found');
+          this.toast.error('Conversation not found');
+          this.router.navigate(['/chats']);
+        } else {
+          this.loadError.set('error');
+        }
       },
     });
 
@@ -1010,7 +1067,59 @@ export class ChatDetailComponent {
         // Mark as read
         this.messagesService.markSeen(id).subscribe();
       },
-      error: () => {},
+      error: (err: HttpErrorResponse) => {
+        if (err?.status !== 404 && !this.chat()) {
+          this.loadError.set('error');
+        }
+      },
+    });
+  }
+
+  retryLoadConversation(): void {
+    const id = this.chatId();
+    if (id && !id.startsWith('new-')) {
+      this.loadConversation(id);
+    }
+  }
+
+  /**
+   * Upsert message ensuring deduplication (E1, B3)
+   */
+  private upsertMessage(msg: ChatMessage, tempIdToReplace?: string): void {
+    this.messages.update((list) => {
+      if (tempIdToReplace) {
+        const tempIdx = list.findIndex((m) => m.id === tempIdToReplace);
+        if (tempIdx !== -1) {
+          const copy = [...list];
+          copy[tempIdx] = msg;
+          return copy;
+        }
+      }
+
+      const existingIdx = list.findIndex((m) => m.id === msg.id);
+      if (existingIdx !== -1) {
+        const copy = [...list];
+        copy[existingIdx] = { ...copy[existingIdx], ...msg };
+        return copy;
+      }
+
+      // If sent message matches an existing pending optimistic message
+      if (msg.sender === 'me') {
+        const pendingIdx = list.findIndex(
+          (m) =>
+            m.status === 'pending' &&
+            m.sender === 'me' &&
+            m.text === msg.text &&
+            (!m.attachment || m.attachment.url === msg.attachment?.url)
+        );
+        if (pendingIdx !== -1) {
+          const copy = [...list];
+          copy[pendingIdx] = msg;
+          return copy;
+        }
+      }
+
+      return [...list, msg];
     });
   }
 
@@ -1021,15 +1130,11 @@ export class ChatDetailComponent {
         if (data.conversationId === this.chatId()) {
           const myId = this.authService.currentUser()?.id;
           const formatted = formatMessageToChatMessage(data.message, myId);
+          this.upsertMessage(formatted);
+          this.scrollToBottom();
 
-          // Avoid duplicates
-          if (!this.messages().some((m) => m.id === formatted.id)) {
-            this.messages.update((list) => [...list, formatted]);
-            this.scrollToBottom();
-
-            if (data.message.senderId !== myId) {
-              this.messagesService.markSeen(this.chatId()).subscribe();
-            }
+          if (data.message.senderId !== myId) {
+            this.messagesService.markSeen(this.chatId()).subscribe();
           }
         }
       })
@@ -1064,6 +1169,24 @@ export class ChatDetailComponent {
         const currentChat = this.chat();
         if (currentChat && !currentChat.isSelfNotes) {
           this.chat.update((c) => (c ? { ...c, isOnline: data.isOnline } : null));
+        }
+      })
+    );
+
+    // 5. Real-time user profile updates (D4)
+    this.subscriptions.push(
+      this.socketService.userUpdated$.subscribe((data) => {
+        const currentChat = this.chat();
+        if (currentChat && !currentChat.isSelfNotes) {
+          if (
+            currentChat.id === data.id ||
+            currentChat.name === data.name ||
+            this.chatId().includes(data.id)
+          ) {
+            this.chat.update((c) =>
+              c ? { ...c, name: data.name, photoUrl: data.avatarUrl } : null
+            );
+          }
         }
       })
     );
@@ -1218,22 +1341,36 @@ export class ChatDetailComponent {
     }
   }
 
-  onFileChosen(event: Event, type: 'image' | 'file'): void {
+  async onFileChosen(event: Event, type: 'image' | 'file'): Promise<void> {
     const input = event.target as HTMLInputElement;
     const file = input.files?.[0];
     if (!file) return;
 
-    this.pendingAttachmentFile.set(file);
-    const url = URL.createObjectURL(file);
-    const sizeStr = (file.size / (1024 * 1024)).toFixed(1) + ' MB';
+    try {
+      let processedFile = file;
+      if (type === 'image') {
+        processedFile = await processChatImage(file);
+      } else if (file.size > 5 * 1024 * 1024) {
+        this.toast.error('File must be smaller than 5 MB');
+        input.value = '';
+        return;
+      }
 
-    this.pendingAttachment.set({
-      type,
-      url,
-      name: file.name,
-      size: sizeStr,
-    });
-    input.value = '';
+      this.pendingAttachmentFile.set(processedFile);
+      const url = URL.createObjectURL(processedFile);
+      const sizeStr = (processedFile.size / (1024 * 1024)).toFixed(1) + ' MB';
+
+      this.pendingAttachment.set({
+        type,
+        url,
+        name: processedFile.name,
+        size: sizeStr,
+      });
+    } catch (err: any) {
+      this.toast.error(err?.message || 'Invalid attachment');
+    } finally {
+      input.value = '';
+    }
   }
 
   clearAttachment(): void {
@@ -1255,6 +1392,22 @@ export class ChatDetailComponent {
     this.lastSelectionStart = 0;
     this.lastSelectionEnd = 0;
 
+    const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const optimisticMsg: ChatMessage = {
+      id: tempId,
+      chatId: currentId,
+      text,
+      sender: 'me',
+      timestamp: new Date().toISOString(),
+      timeString: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+      status: 'pending',
+      attachment: att || undefined,
+    };
+
+    // Add optimistic bubble with sending clock icon
+    this.upsertMessage(optimisticMsg);
+    this.scrollToBottom();
+
     // Handle draft conversation (initiating to a new user)
     if (currentId.startsWith('new-')) {
       const recipientId = currentId.replace('new-', '');
@@ -1262,18 +1415,24 @@ export class ChatDetailComponent {
       if (attFile) {
         this.messagesService.uploadAttachment(attFile).subscribe({
           next: (uploadRes) => {
-            this.createAndSendConv(recipientId, text, {
-              type: 'image',
-              url: uploadRes.url,
-              name: attFile.name,
-            });
+            this.createAndSendConv(
+              recipientId,
+              text,
+              tempId,
+              {
+                type: 'image',
+                url: uploadRes.url,
+                name: attFile.name,
+              }
+            );
           },
           error: (err) => {
+            this.markMessageFailed(tempId);
             this.toast.error(err?.error?.error?.message || 'Attachment upload failed');
           },
         });
       } else {
-        this.createAndSendConv(recipientId, text);
+        this.createAndSendConv(recipientId, text, tempId);
       }
       return;
     }
@@ -1282,46 +1441,82 @@ export class ChatDetailComponent {
     if (attFile) {
       this.messagesService.uploadAttachment(attFile).subscribe({
         next: (uploadRes) => {
-          this.executeSendMessage(currentId, {
-            body: text,
-            type: 'image',
-            attachmentUrl: uploadRes.url,
-            attachmentName: attFile.name,
-          });
+          this.executeSendMessage(
+            currentId,
+            {
+              body: text,
+              type: 'image',
+              attachmentUrl: uploadRes.url,
+              attachmentName: attFile.name,
+            },
+            tempId
+          );
         },
         error: (err) => {
+          this.markMessageFailed(tempId);
           this.toast.error(err?.error?.error?.message || 'Attachment upload failed');
         },
       });
     } else {
-      this.executeSendMessage(currentId, { body: text });
+      this.executeSendMessage(currentId, { body: text }, tempId);
     }
   }
 
-  private createAndSendConv(recipientId: string, text: string, attachment?: any): void {
+  private createAndSendConv(recipientId: string, text: string, tempId: string, attachment?: any): void {
     this.conversationsService.createConversation(recipientId, text, attachment).subscribe({
       next: (res) => {
+        const myId = this.authService.currentUser()?.id;
+        const formatted = formatMessageToChatMessage(res.message, myId);
+        this.upsertMessage(formatted, tempId);
         this.toast.success('Message sent!');
         this.router.navigate(['/chats', res.conversationId], { replaceUrl: true });
       },
       error: (err) => {
+        this.markMessageFailed(tempId);
         this.toast.error(err?.error?.error?.message || 'Failed to send message');
       },
     });
   }
 
-  private executeSendMessage(conversationId: string, payload: any): void {
+  private executeSendMessage(conversationId: string, payload: any, tempId?: string): void {
     this.messagesService.sendMessage(conversationId, payload).subscribe({
       next: (msg) => {
         const myId = this.authService.currentUser()?.id;
         const formatted = formatMessageToChatMessage(msg, myId);
-        this.messages.update((list) => [...list, formatted]);
+        this.upsertMessage(formatted, tempId);
         this.scrollToBottom();
       },
-      error: (err) => {
-        this.toast.error(err?.error?.error?.message || 'Failed to send message');
+      error: () => {
+        if (tempId) {
+          this.markMessageFailed(tempId);
+        }
       },
     });
+  }
+
+  private markMessageFailed(tempId: string): void {
+    this.messages.update((list) =>
+      list.map((m) => (m.id === tempId ? { ...m, status: 'failed' as const } : m))
+    );
+  }
+
+  retrySendMessage(msg: ChatMessage): void {
+    const currentId = this.chatId();
+    if (!currentId || currentId.startsWith('new-')) return;
+
+    // Mark back to pending
+    this.messages.update((list) =>
+      list.map((m) => (m.id === msg.id ? { ...m, status: 'pending' as const } : m))
+    );
+
+    const payload: any = { body: msg.text };
+    if (msg.attachment) {
+      payload.type = msg.attachment.type;
+      payload.attachmentUrl = msg.attachment.url;
+      payload.attachmentName = msg.attachment.name;
+    }
+
+    this.executeSendMessage(currentId, payload, msg.id);
   }
 
   // Request actions (Incoming)
@@ -1464,5 +1659,14 @@ export class ChatDetailComponent {
     };
     scroll();
     setTimeout(scroll, 50);
+  }
+
+  ngOnDestroy(): void {
+    this.subscriptions.forEach((s) => s.unsubscribe());
+    this.subscriptions = [];
+    if (this.typingStopTimer) {
+      clearTimeout(this.typingStopTimer);
+      this.typingStopTimer = null;
+    }
   }
 }

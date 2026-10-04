@@ -9,6 +9,7 @@ import { ConversationsService } from '../../../shared/services/conversations.ser
 import { AppTheme, ThemeService } from '../../../shared/services/theme.service';
 import { ToastService } from '../../../shared/services/toast.service';
 import { BlockedItem, DeclinedItem, getInitials } from '../../../shared/models/api.models';
+import { processAvatarImage } from '../../../shared/utils/image-processor';
 import { AvatarComponent } from '../../../shared/components/avatar/avatar.component';
 import { ButtonComponent } from '../../../shared/components/button/button.component';
 import { SvgIconComponent } from '../../../shared/components/svg-icon/svg-icon.component';
@@ -869,16 +870,23 @@ export class SettingsComponent implements OnInit {
     return !isDirty || this.profileForm.invalid || this.isSaving();
   }
 
-  onAvatarSelected(event: Event): void {
-    const file = (event.target as HTMLInputElement).files?.[0];
-    if (file) {
-      this.selectedAvatarFile.set(file);
+  async onAvatarSelected(event: Event): Promise<void> {
+    const input = event.target as HTMLInputElement;
+    const file = input.files?.[0];
+    if (!file) return;
+
+    try {
+      const processedFile = await processAvatarImage(file);
+      this.selectedAvatarFile.set(processedFile);
       const reader = new FileReader();
       reader.onload = () => {
         this.photoPreview.set(reader.result as string);
         this.profileForm.markAsDirty();
       };
-      reader.readAsDataURL(file);
+      reader.readAsDataURL(processedFile);
+    } catch (err: any) {
+      this.toast.error(err?.message || 'Invalid avatar image');
+      input.value = '';
     }
   }
 
@@ -941,31 +949,50 @@ export class SettingsComponent implements OnInit {
     const val = this.profileForm.value;
     const avatarFile = this.selectedAvatarFile();
 
-    const updateProfile$ = this.usersService.updateMe({
-      name: val.name,
-    });
-    const uploadAvatar$ = avatarFile ? this.usersService.uploadAvatar(avatarFile) : of(null);
+    if (avatarFile) {
+      // C5: Consistent save. If avatar fails, show "Photo could not be saved" and do NOT save other changes or show success toast
+      this.usersService.uploadAvatar(avatarFile).subscribe({
+        next: () => {
+          this.usersService.updateMe({ name: val.name }).subscribe({
+            next: (updatedUser) => {
+              this.handleSaveSuccess(updatedUser);
+            },
+            error: (err) => {
+              this.isSaving.set(false);
+              this.toast.error(err.error?.message || 'Failed to save changes');
+            },
+          });
+        },
+        error: () => {
+          this.isSaving.set(false);
+          this.toast.error('Photo could not be saved');
+        },
+      });
+    } else {
+      this.usersService.updateMe({ name: val.name }).subscribe({
+        next: (updatedUser) => {
+          this.handleSaveSuccess(updatedUser);
+        },
+        error: (err) => {
+          this.isSaving.set(false);
+          this.toast.error(err.error?.message || 'Failed to save changes');
+        },
+      });
+    }
+  }
 
-    forkJoin([updateProfile$, uploadAvatar$]).subscribe({
-      next: ([updatedProfile, avatarResult]) => {
-        const finalUser = avatarResult || updatedProfile;
-        this.authService.currentUser.set(finalUser);
-        this.profileForm.patchValue({
-          name: finalUser.name,
-          username: finalUser.username,
-          email: finalUser.email,
-        });
-        this.profileForm.markAsPristine();
-        this.selectedAvatarFile.set(null);
-        this.photoPreview.set(null);
-        this.isSaving.set(false);
-        this.toast.success('Changes saved');
-      },
-      error: (err) => {
-        this.isSaving.set(false);
-        this.toast.error(err.error?.message || 'Failed to save changes');
-      },
+  private handleSaveSuccess(finalUser: any): void {
+    this.authService.currentUser.set(finalUser);
+    this.profileForm.patchValue({
+      name: finalUser.name,
+      username: finalUser.username,
+      email: finalUser.email,
     });
+    this.profileForm.markAsPristine();
+    this.selectedAvatarFile.set(null);
+    this.photoPreview.set(null);
+    this.isSaving.set(false);
+    this.toast.success('Changes saved');
   }
 
   // Email verification OTP handlers

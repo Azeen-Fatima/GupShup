@@ -29,6 +29,14 @@ export interface NewMessagePayload {
   message: Message;
 }
 
+export interface UserUpdatedPayload {
+  id: string;
+  name: string;
+  avatarUrl: string | null;
+  bio?: string | null;
+  statusMessage?: string | null;
+}
+
 @Injectable({
   providedIn: 'root',
 })
@@ -47,6 +55,7 @@ export class SocketService implements OnDestroy {
   readonly presenceUpdate$ = new Subject<PresenceUpdatePayload>();
   readonly typingUpdate$ = new Subject<TypingUpdatePayload>();
   readonly conversationUpdated$ = new Subject<{ conversationId: string; [key: string]: any }>();
+  readonly userUpdated$ = new Subject<UserUpdatedPayload>();
 
   constructor() {
     // Automatically manage connection lifecycle based on authentication signal
@@ -117,6 +126,11 @@ export class SocketService implements OnDestroy {
     this.socket.on('conversation:updated', (data: any) => {
       this.conversationUpdated$.next(data);
       this.conversationsService.loadConversations().subscribe();
+    });
+
+    this.socket.on('user:updated', (data: UserUpdatedPayload) => {
+      this.conversationsService.updateUserProfile(data);
+      this.userUpdated$.next(data);
     });
   }
 

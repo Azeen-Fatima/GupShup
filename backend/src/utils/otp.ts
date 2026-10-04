@@ -5,7 +5,6 @@ import { BadRequestError, TooManyRequestsError } from './errors';
 
 export type OtpPurpose = 'signup' | 'forgot_password' | 'change_email';
 
-const RESEND_COOLDOWN_SECONDS = 30;
 const MAX_WRONG_ATTEMPTS = 5;
 
 export function generate6DigitOtp(): string {
@@ -14,34 +13,63 @@ export function generate6DigitOtp(): string {
   return num.toString();
 }
 
-export async function createAndStoreOtp(email: string, purpose: OtpPurpose): Promise<string> {
+/**
+ * Cooldown progression:
+ * 1st resend: 30s
+ * 2nd resend: 60s
+ * 3rd resend and beyond: 120s
+ */
+function getCooldownSeconds(resendCount: number): number {
+  if (resendCount <= 0) return 30;
+  if (resendCount === 1) return 60;
+  return 120;
+}
+
+export interface CreateOtpResult {
+  code: string;
+  cooldownSeconds: number;
+}
+
+export async function createAndStoreOtp(email: string, purpose: OtpPurpose): Promise<CreateOtpResult> {
   const normalizedEmail = email.toLowerCase().trim();
   const cooldownKey = `otp_cooldown:${purpose}:${normalizedEmail}`;
   const otpKey = `otp:${purpose}:${normalizedEmail}`;
   const attemptsKey = `otp_attempts:${purpose}:${normalizedEmail}`;
+  const resendCountKey = `otp_resend_count:${purpose}:${normalizedEmail}`;
 
-  // Check 30s resend cooldown
+  // Check active cooldown
   const inCooldown = await redis.exists(cooldownKey);
   if (inCooldown) {
     const ttl = await redis.ttl(cooldownKey);
+    const retryAfterSeconds = ttl > 0 ? ttl : 30;
     throw new TooManyRequestsError(
-      `Please wait ${ttl > 0 ? ttl : RESEND_COOLDOWN_SECONDS} seconds before requesting a new code`,
-      'OTP_COOLDOWN'
+      `Please wait ${retryAfterSeconds} seconds before requesting a new code`,
+      'OTP_COOLDOWN',
+      { retryAfterSeconds },
+      retryAfterSeconds
     );
   }
 
+  // Get current resend count
+  const countStr = await redis.get(resendCountKey);
+  const resendCount = countStr ? parseInt(countStr, 10) : 0;
+  const cooldownSeconds = getCooldownSeconds(resendCount);
+
   const code = generate6DigitOtp();
 
-  // Store OTP with configured TTL
+  // Store OTP with configured TTL (separate from cooldown, 10 minutes)
   await redis.set(otpKey, code, 'EX', env.OTP_TTL_SECONDS);
 
-  // Set 30s cooldown
-  await redis.set(cooldownKey, '1', 'EX', RESEND_COOLDOWN_SECONDS);
+  // Set cooldown with escalating duration
+  await redis.set(cooldownKey, '1', 'EX', cooldownSeconds);
+
+  // Increment resend count with OTP TTL
+  await redis.set(resendCountKey, String(resendCount + 1), 'EX', env.OTP_TTL_SECONDS);
 
   // Reset wrong attempts counter
   await redis.del(attemptsKey);
 
-  return code;
+  return { code, cooldownSeconds };
 }
 
 export async function verifyStoredOtp(email: string, purpose: OtpPurpose, code: string): Promise<boolean> {
@@ -49,6 +77,7 @@ export async function verifyStoredOtp(email: string, purpose: OtpPurpose, code: 
   const otpKey = `otp:${purpose}:${normalizedEmail}`;
   const attemptsKey = `otp_attempts:${purpose}:${normalizedEmail}`;
   const cooldownKey = `otp_cooldown:${purpose}:${normalizedEmail}`;
+  const resendCountKey = `otp_resend_count:${purpose}:${normalizedEmail}`;
 
   const storedCode = await redis.get(otpKey);
   if (!storedCode) {
@@ -67,6 +96,7 @@ export async function verifyStoredOtp(email: string, purpose: OtpPurpose, code: 
       await redis.del(otpKey);
       await redis.del(attemptsKey);
       await redis.del(cooldownKey);
+      await redis.del(resendCountKey);
       throw new BadRequestError(
         'Maximum verification attempts exceeded. Please request a new code.',
         'OTP_MAX_ATTEMPTS'
@@ -85,6 +115,7 @@ export async function verifyStoredOtp(email: string, purpose: OtpPurpose, code: 
   await redis.del(otpKey);
   await redis.del(attemptsKey);
   await redis.del(cooldownKey);
+  await redis.del(resendCountKey);
 
   return true;
 }

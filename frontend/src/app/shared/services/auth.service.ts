@@ -29,10 +29,10 @@ export class AuthService {
   /**
    * Request signup verification code
    */
-  requestSignupOtp(email: string): Observable<{ message: string }> {
+  requestSignupOtp(email: string): Observable<{ message: string; cooldownSeconds?: number }> {
     return this.http
-      .post<ApiResponse<{ message: string }>>(`${this.baseUrl}/signup/code`, { email })
-      .pipe(map((res) => res.data || { message: 'Code sent' }));
+      .post<ApiResponse<{ message: string; cooldownSeconds?: number }>>(`${this.baseUrl}/signup/code`, { email })
+      .pipe(map((res) => res.data || { message: 'Code sent', cooldownSeconds: 30 }));
   }
 
   /**
@@ -146,10 +146,10 @@ export class AuthService {
   /**
    * Request password reset code
    */
-  requestForgotPasswordOtp(email: string): Observable<{ message: string }> {
+  requestForgotPasswordOtp(email: string): Observable<{ message: string; cooldownSeconds?: number }> {
     return this.http
-      .post<ApiResponse<{ message: string }>>(`${this.baseUrl}/forgot-password/code`, { email })
-      .pipe(map((res) => res.data || { message: 'Verification code sent' }));
+      .post<ApiResponse<{ message: string; cooldownSeconds?: number }>>(`${this.baseUrl}/forgot-password/code`, { email })
+      .pipe(map((res) => res.data || { message: 'Verification code sent', cooldownSeconds: 30 }));
   }
 
   /**
@@ -191,10 +191,10 @@ export class AuthService {
   /**
    * Request change email code
    */
-  requestChangeEmailOtp(newEmail: string): Observable<{ message: string }> {
+  requestChangeEmailOtp(newEmail: string): Observable<{ message: string; cooldownSeconds?: number }> {
     return this.http
-      .post<ApiResponse<{ message: string }>>(`${this.baseUrl}/change-email/code`, { newEmail })
-      .pipe(map((res) => res.data || { message: 'Verification code sent' }));
+      .post<ApiResponse<{ message: string; cooldownSeconds?: number }>>(`${this.baseUrl}/change-email/code`, { newEmail })
+      .pipe(map((res) => res.data || { message: 'Verification code sent', cooldownSeconds: 30 }));
   }
 
   /**

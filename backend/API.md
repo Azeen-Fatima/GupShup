@@ -345,3 +345,4 @@ const socket = io('http://localhost:3000', {
 | `message:new` | `{ "conversationId": "uuid", "message": { ... } }` | Delivered in real-time when new message is sent |
 | `message:seen` | `{ "conversationId": "uuid", "seenBy": "uuid", "seenAt": "iso" }` | Delivered when recipient opens conversation |
 | `conversation:updated`| `{ "conversationId": "uuid", ... }` | Delivered on accept, decline, block, etc. |
+| `user:updated` | `{ "id": "uuid", "name": "string", "avatarUrl": "string|null", "bio": "string|null", "statusMessage": "string|null" }` | Delivered to conversation partners when a user updates profile or avatar |

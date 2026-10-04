@@ -46,6 +46,16 @@ export class MessagesService {
 
     const items = await prisma.message.findMany({
       where: whereClause,
+      include: {
+        sender: {
+          select: {
+            id: true,
+            name: true,
+            username: true,
+            avatarUrl: true,
+          },
+        },
+      },
       orderBy: { createdAt: 'desc' },
       take: limit + 1,
     });
@@ -133,6 +143,16 @@ export class MessagesService {
         attachmentName: input.attachmentName || null,
         attachmentSize: input.attachmentSize || null,
         attachmentMime: input.attachmentMime || null,
+      },
+      include: {
+        sender: {
+          select: {
+            id: true,
+            name: true,
+            username: true,
+            avatarUrl: true,
+          },
+        },
       },
     });
 

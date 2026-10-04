@@ -9,13 +9,18 @@ const envCandidate1 = path.join(backendDir, '.env');
 const envCandidate2 = path.resolve(__dirname, '../.env');
 const envCandidate3 = path.resolve(process.cwd(), '.env');
 
-if (fs.existsSync(envCandidate1)) {
-  dotenv.config({ path: envCandidate1 });
-} else if (fs.existsSync(envCandidate2)) {
-  dotenv.config({ path: envCandidate2 });
-} else if (fs.existsSync(envCandidate3)) {
-  dotenv.config({ path: envCandidate3 });
-} else {
+let envFileContent = '';
+let loadedEnvPath: string | null = null;
+const envPaths = [envCandidate1, envCandidate2, envCandidate3];
+for (const p of envPaths) {
+  if (fs.existsSync(p)) {
+    loadedEnvPath = p;
+    envFileContent = fs.readFileSync(p, 'utf-8');
+    dotenv.config({ path: p });
+    break;
+  }
+}
+if (!loadedEnvPath) {
   dotenv.config();
 }
 
@@ -38,14 +43,28 @@ const envSchema = z.object({
   CLOUDINARY_CLOUD_NAME: z.string().optional().default(''),
   CLOUDINARY_API_KEY: z.string().optional().default(''),
   CLOUDINARY_API_SECRET: z.string().optional().default(''),
-  OTP_TTL_SECONDS: z.coerce.number().default(900),
+  OTP_TTL_SECONDS: z.coerce.number().default(600),
+  PRISMA_LOG_QUERIES: z.coerce.boolean().default(false),
 });
+
+// Check for unknown keys in .env file
+if (envFileContent) {
+  const parsedFromFile = dotenv.parse(envFileContent);
+  const knownKeys = new Set(Object.keys(envSchema.shape));
+  const unknownKeys = Object.keys(parsedFromFile).filter((k) => !knownKeys.has(k));
+  if (unknownKeys.length > 0) {
+    console.warn(
+      `[Startup Warning] Unknown environment variable(s) found in .env: ${unknownKeys.join(', ')}`
+    );
+  }
+}
 
 const parsed = envSchema.safeParse(process.env);
 
 if (!parsed.success) {
   const missingKeys = parsed.error.issues.map((issue) => issue.path.join('.')).filter(Boolean);
   const formatted = missingKeys.join(', ');
+  console.error(`[Startup Error] Missing or invalid required environment variable(s): ${formatted}`);
   throw new Error(
     `[Startup Error] Missing or invalid required environment variable(s): ${formatted}. Please check backend/.env.`
   );

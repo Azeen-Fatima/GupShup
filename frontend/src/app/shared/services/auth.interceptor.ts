@@ -1,7 +1,7 @@
 import { HttpErrorResponse, HttpInterceptorFn, HttpRequest } from '@angular/common/http';
 import { inject } from '@angular/core';
 import { Router } from '@angular/router';
-import { BehaviorSubject, catchError, filter, switchMap, take, throwError } from 'rxjs';
+import { BehaviorSubject, catchError, filter, retry, switchMap, take, throwError, timer } from 'rxjs';
 import { AuthService } from './auth.service';
 
 let isRefreshing = false;
@@ -25,7 +25,27 @@ export const authInterceptor: HttpInterceptorFn = (req, next) => {
     });
   }
 
-  return next(clonedReq).pipe(
+  // Idempotent GET retry (max 2 tries, short backoff on network errors or 502/503/504)
+  const source$ = next(clonedReq);
+  const stream$ =
+    req.method === 'GET'
+      ? source$.pipe(
+          retry({
+            count: 2,
+            delay: (error, retryCount) => {
+              if (
+                error instanceof HttpErrorResponse &&
+                (error.status === 0 || error.status === 502 || error.status === 503 || error.status === 504)
+              ) {
+                return timer(retryCount * 400);
+              }
+              throw error;
+            },
+          })
+        )
+      : source$;
+
+  return stream$.pipe(
     catchError((error: unknown) => {
       if (error instanceof HttpErrorResponse && error.status === 401) {
         // Do not attempt refresh on auth endpoints to prevent infinite loops

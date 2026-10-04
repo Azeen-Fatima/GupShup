@@ -35,6 +35,18 @@ describe('Auth Module Integration Tests', () => {
     expect(mail?.code?.length).toBe(6);
   });
 
+  it('1b. POST /api/v1/auth/signup/code returns 429 when requesting within cooldown period', async () => {
+    const res = await request(app)
+      .post('/api/v1/auth/signup/code')
+      .send({ email: testEmail });
+
+    expect(res.status).toBe(429);
+    expect(res.body.success).toBe(false);
+    expect(res.body.error.code).toBe('OTP_COOLDOWN');
+    expect(res.body.retryAfterSeconds).toBeGreaterThan(0);
+    expect(res.headers['retry-after']).toBeDefined();
+  });
+
   it('2. POST /api/v1/auth/signup/verify verifies code and issues signupToken', async () => {
     const mail = capturedMails.find((m) => m.to === testEmail);
     const code = mail!.code!;

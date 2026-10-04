@@ -30,10 +30,11 @@ import { ChatItem } from '../../mock/mock-data';
       <!-- Content wrapper that gets faded if declined or blocked -->
       <div class="row-content">
         <app-avatar
+          [avatarUrl]="chat().photoUrl"
           [name]="chat().name"
           [initials]="chat().initials"
           [size]="'lg'"
-          [isOnline]="chat().isOnline"
+          [showOnlineDot]="chat().isOnline"
         ></app-avatar>
 
         <div class="info">

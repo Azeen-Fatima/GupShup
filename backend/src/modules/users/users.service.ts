@@ -1,6 +1,7 @@
 import { prisma } from '../../db/prisma';
 import { NotFoundError } from '../../utils/errors';
 import { UpdateProfileInput } from './users.schemas';
+import { emitToUser } from '../../sockets';
 
 export type RelationshipStatus =
   | 'none'
@@ -12,6 +13,46 @@ export type RelationshipStatus =
   | 'blocked_by_them';
 
 export class UsersService {
+  /**
+   * Helper to broadcast user:updated to all conversation partners
+   */
+  private async notifyUserUpdated(user: {
+    id: string;
+    name: string;
+    avatarUrl: string | null;
+    bio?: string | null;
+    statusMessage?: string | null;
+  }) {
+    try {
+      const conversations = await prisma.conversation.findMany({
+        where: {
+          OR: [{ userAId: user.id }, { userBId: user.id }],
+        },
+        select: { userAId: true, userBId: true },
+      });
+
+      const userIdsToNotify = new Set<string>();
+      for (const conv of conversations) {
+        userIdsToNotify.add(conv.userAId);
+        userIdsToNotify.add(conv.userBId);
+      }
+
+      const payload = {
+        id: user.id,
+        name: user.name,
+        avatarUrl: user.avatarUrl,
+        bio: user.bio ?? null,
+        statusMessage: user.statusMessage ?? null,
+      };
+
+      for (const partnerId of userIdsToNotify) {
+        emitToUser(partnerId, 'user:updated', payload);
+      }
+    } catch {
+      // Ignore background notification error
+    }
+  }
+
   /**
    * Get user profile by ID
    */
@@ -64,6 +105,7 @@ export class UsersService {
       },
     });
 
+    await this.notifyUserUpdated(user);
     return user;
   }
 
@@ -71,7 +113,7 @@ export class UsersService {
    * Update avatar URL
    */
   async updateAvatar(userId: string, avatarUrl: string) {
-    return prisma.user.update({
+    const user = await prisma.user.update({
       where: { id: userId },
       data: { avatarUrl },
       select: {
@@ -86,13 +128,16 @@ export class UsersService {
         createdAt: true,
       },
     });
+
+    await this.notifyUserUpdated(user);
+    return user;
   }
 
   /**
    * Remove avatar URL
    */
   async removeAvatar(userId: string) {
-    return prisma.user.update({
+    const user = await prisma.user.update({
       where: { id: userId },
       data: { avatarUrl: null },
       select: {
@@ -107,6 +152,9 @@ export class UsersService {
         createdAt: true,
       },
     });
+
+    await this.notifyUserUpdated(user);
+    return user;
   }
 
   /**
