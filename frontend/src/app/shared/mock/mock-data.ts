@@ -51,6 +51,8 @@ export interface ChatItem {
   canSendExtraMessage?: boolean;
   rawState?: string;
   rawStatus?: string;
+  otherUserId?: string;
+  lastSeen?: string | null;
 }
 
 export interface DeclinedRequest {

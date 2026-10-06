@@ -210,6 +210,8 @@ export function formatConversationToChatItem(
     canSendExtraMessage: conv.canSendExtraMessage ?? false,
     rawState: conv.state,
     rawStatus: conv.status,
+    otherUserId: conv.otherUser.id,
+    lastSeen: conv.otherUser.lastSeen || null,
   };
 }
 

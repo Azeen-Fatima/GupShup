@@ -167,18 +167,18 @@ export class SocketService implements OnDestroy {
   /**
    * Emit typing started in a conversation
    */
-  startTyping(conversationId: string): void {
+  startTyping(conversationId: string, recipientId?: string): void {
     if (this.socket?.connected) {
-      this.socket.emit('typing:start', { conversationId });
+      this.socket.emit('typing:start', { conversationId, recipientId });
     }
   }
 
   /**
    * Emit typing stopped in a conversation
    */
-  stopTyping(conversationId: string): void {
+  stopTyping(conversationId: string, recipientId?: string): void {
     if (this.socket?.connected) {
-      this.socket.emit('typing:stop', { conversationId });
+      this.socket.emit('typing:stop', { conversationId, recipientId });
     }
   }
 

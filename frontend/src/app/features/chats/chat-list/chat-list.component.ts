@@ -681,6 +681,7 @@ export class ChatListComponent implements OnInit {
 
   messagePerson(person: SearchUserResult): void {
     this.sheetOpen.set(false);
+    this.usersService.setDraftUser(person);
     if (person.conversationId) {
       this.router.navigate(['/chats', person.conversationId]);
     } else {

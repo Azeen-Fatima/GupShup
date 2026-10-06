@@ -1,4 +1,4 @@
-import { Injectable, inject } from '@angular/core';
+import { Injectable, inject, signal } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Observable, map } from 'rxjs';
 import { environment } from '../../../environments/environment';
@@ -16,6 +16,16 @@ import {
 export class UsersService {
   private readonly http = inject(HttpClient);
   private readonly baseUrl = `${environment.apiUrl}/users`;
+
+  private readonly draftUser = signal<SearchUserResult | null>(null);
+
+  setDraftUser(user: SearchUserResult | null): void {
+    this.draftUser.set(user);
+  }
+
+  getDraftUser(): SearchUserResult | null {
+    return this.draftUser();
+  }
 
   /**
    * Get logged-in user profile
@@ -88,5 +98,16 @@ export class UsersService {
     return this.http
       .get<ApiResponse<{ blocked: BlockedItem[] }>>(`${this.baseUrl}/me/blocked`)
       .pipe(map((res) => res.data?.blocked || []));
+  }
+
+  /**
+   * Get public profile by user ID
+   */
+  getUserById(id: string): Observable<User & { isOnline?: boolean; lastSeen?: string | null }> {
+    return this.http
+      .get<ApiResponse<{ user: User & { isOnline?: boolean; lastSeen?: string | null } }>>(
+        `${this.baseUrl}/${id}`
+      )
+      .pipe(map((res) => res.data!.user));
   }
 }

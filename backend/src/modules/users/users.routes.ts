@@ -18,5 +18,6 @@ router.delete('/me/avatar', controller.removeAvatar);
 router.get('/search', validate(searchUsersQuerySchema, 'query'), controller.searchUsers);
 router.get('/me/declined', controller.getDeclined);
 router.get('/me/blocked', controller.getBlocked);
+router.get('/:id', controller.getUserById);
 
 export default router;

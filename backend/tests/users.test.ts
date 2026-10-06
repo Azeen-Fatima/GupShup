@@ -101,4 +101,17 @@ describe('Users Module Integration Tests', () => {
     expect(res.body.success).toBe(false);
     expect(res.body.error.message).toContain('File must be smaller than 5 MB');
   });
+
+  it('8. GET /api/v1/users/:id returns user profile with presence', async () => {
+    const res = await request(app)
+      .get(`/api/v1/users/${user2.user.id}`)
+      .set('Authorization', user1.authHeader);
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data.user.id).toBe(user2.user.id);
+    expect(res.body.data.user.username).toBe(user2.user.username);
+    expect(res.body.data.user).toHaveProperty('isOnline');
+    expect(res.body.data.user).toHaveProperty('lastSeen');
+  });
 });

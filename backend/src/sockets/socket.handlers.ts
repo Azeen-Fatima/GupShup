@@ -1,7 +1,7 @@
 import { Server } from 'socket.io';
 import { AuthenticatedSocket } from './socket.auth';
 import { presenceService } from '../modules/presence/presence.service';
-import { emitToConversationMembers } from './index';
+import { emitToConversationMembers, emitToUser } from './index';
 import { logger } from '../config/logger';
 
 export function registerSocketHandlers(io: Server, socket: AuthenticatedSocket) {
@@ -23,27 +23,47 @@ export function registerSocketHandlers(io: Server, socket: AuthenticatedSocket) 
   });
 
   // Typing start
-  socket.on('typing:start', async (data: { conversationId: string }) => {
-    if (!data?.conversationId) return;
-    await presenceService.setTyping(data.conversationId, userId);
-    await emitToConversationMembers(
-      data.conversationId,
-      'typing:update',
-      { conversationId: data.conversationId, userId, isTyping: true },
-      userId
-    );
+  socket.on('typing:start', async (data: { conversationId?: string; recipientId?: string }) => {
+    if (!data?.conversationId && !data?.recipientId) return;
+    const convId = data.conversationId;
+    if (convId && !convId.startsWith('new-')) {
+      await presenceService.setTyping(convId, userId);
+      await emitToConversationMembers(
+        convId,
+        'typing:update',
+        { conversationId: convId, userId, isTyping: true },
+        userId
+      );
+    }
+    if (data.recipientId) {
+      emitToUser(data.recipientId, 'typing:update', {
+        conversationId: convId || `new-${userId}`,
+        userId,
+        isTyping: true,
+      });
+    }
   });
 
   // Typing stop
-  socket.on('typing:stop', async (data: { conversationId: string }) => {
-    if (!data?.conversationId) return;
-    await presenceService.clearTyping(data.conversationId, userId);
-    await emitToConversationMembers(
-      data.conversationId,
-      'typing:update',
-      { conversationId: data.conversationId, userId, isTyping: false },
-      userId
-    );
+  socket.on('typing:stop', async (data: { conversationId?: string; recipientId?: string }) => {
+    if (!data?.conversationId && !data?.recipientId) return;
+    const convId = data.conversationId;
+    if (convId && !convId.startsWith('new-')) {
+      await presenceService.clearTyping(convId, userId);
+      await emitToConversationMembers(
+        convId,
+        'typing:update',
+        { conversationId: convId, userId, isTyping: false },
+        userId
+      );
+    }
+    if (data.recipientId) {
+      emitToUser(data.recipientId, 'typing:update', {
+        conversationId: convId || `new-${userId}`,
+        userId,
+        isTyping: false,
+      });
+    }
   });
 
   // Disconnect handler

@@ -67,7 +67,7 @@ import { EmptyStateComponent } from '../../../shared/components/empty-state/empt
 
           <div class="chat-meta">
             <h2 class="chat-name">{{ chat()!.name }}</h2>
-            <div class="chat-status" [class.online]="chat()!.isOnline && !isTyping()">
+            <div class="chat-status" [class.online]="chat()!.isOnline || isTyping()">
               {{ getStatusText() }}
             </div>
           </div>
@@ -125,8 +125,10 @@ import { EmptyStateComponent } from '../../../shared/components/empty-state/empt
             }
           </div>
         } @else {
-          <div class="chat-meta">
-            <h2 class="chat-name">Conversation</h2>
+          <div class="header-skel-avatar" aria-hidden="true"></div>
+          <div class="chat-meta header-skel-meta" aria-hidden="true">
+            <div class="header-skel-line" style="width: 110px;"></div>
+            <div class="header-skel-line" style="width: 65px; height: 10px;"></div>
           </div>
         }
       </header>
@@ -145,9 +147,24 @@ import { EmptyStateComponent } from '../../../shared/components/empty-state/empt
           <div class="chat-messages-content empty">
             <app-empty-state
               type="no-messages"
-              title="Say hi 👋"
-              [subtitle]="chat() ? 'Start a cozy conversation with ' + chat()!.name : 'Send a first message to connect.'"
-            ></app-empty-state>
+              title="Start the conversation"
+            >
+              @if (isChatPendingOrLimited()) {
+                <p class="empty-sub">Say hello to {{ otherPartyName() }} to send a chat request.</p>
+                <p class="empty-sub-muted">You can send 1 message until they accept.</p>
+              } @else {
+                <p class="empty-sub">Say hello to {{ otherPartyName() }}</p>
+              }
+            </app-empty-state>
+
+            <!-- Typing indicator in empty chat -->
+            @if (isTyping()) {
+              <div class="typing-indicator" [attr.aria-label]="chat()?.name + ' is typing'" role="status" style="margin: 12px auto 0;">
+                <span></span>
+                <span></span>
+                <span></span>
+              </div>
+            }
           </div>
         } @else {
           <div class="chat-messages-content">
@@ -457,6 +474,28 @@ import { EmptyStateComponent } from '../../../shared/components/empty-state/empt
       }
     }
 
+    .header-skel-avatar {
+      width: 38px;
+      height: 38px;
+      border-radius: 50%;
+      background-color: var(--input);
+      flex-shrink: 0;
+      animation: pulse 1.5s infinite ease-in-out;
+    }
+
+    .header-skel-meta {
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+    }
+
+    .header-skel-line {
+      height: 14px;
+      border-radius: 4px;
+      background-color: var(--input);
+      animation: pulse 1.5s infinite ease-in-out;
+    }
+
     .header-menu-wrap {
       position: relative;
     }
@@ -540,6 +579,23 @@ import { EmptyStateComponent } from '../../../shared/components/empty-state/empt
       &.empty {
         margin: auto 0;
       }
+    }
+
+    .empty-sub {
+      font-size: 13.5px;
+      color: var(--muted);
+      margin: 0;
+      line-height: 1.45;
+      text-align: center;
+    }
+
+    .empty-sub-muted {
+      font-size: 11.5px;
+      color: var(--muted);
+      opacity: 0.85;
+      margin: 4px 0 0;
+      line-height: 1.4;
+      text-align: center;
     }
 
     .chat-error-banner {
@@ -967,6 +1023,11 @@ import { EmptyStateComponent } from '../../../shared/components/empty-state/empt
       from { opacity: 0; }
       to { opacity: 1; }
     }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 0.6; }
+      50% { opacity: 0.25; }
+    }
   `],
 })
 export class ChatDetailComponent implements OnDestroy {
@@ -1021,9 +1082,30 @@ export class ChatDetailComponent implements OnDestroy {
     return null;
   });
 
+  readonly otherPartyName = computed(() => {
+    const c = this.chat();
+    if (!c) return 'there';
+    if (c.isSelfNotes) return 'yourself';
+    return c.name;
+  });
+
+  readonly isChatPendingOrLimited = computed(() => {
+    const c = this.chat();
+    if (!c) {
+      return this.chatId().startsWith('new-');
+    }
+    if (c.isSelfNotes) return false;
+    if (this.chatId().startsWith('new-')) return true;
+    if (c.rawStatus === 'accepted' || c.rawState === 'normal') return false;
+    if (c.isPendingRequest || c.rawStatus === 'pending' || c.rawState === 'pending_sent') return true;
+    return false;
+  });
+
   readonly isTypingDisabled = computed(() => {
     const c = this.chat();
-    if (!c) return true;
+    if (!c) {
+      return !this.chatId().startsWith('new-');
+    }
     if (c.isIncomingRequest || c.isBlocked || c.isBlockedByThem) return true;
     if (c.isDeclined) {
       return !c.canSendExtraMessage;
@@ -1035,11 +1117,7 @@ export class ChatDetailComponent implements OnDestroy {
   });
 
   readonly isAttachDisabled = computed(() => {
-    const c = this.chat();
-    if (!c) return true;
-    if (c.isIncomingRequest || c.isBlocked || c.isBlockedByThem) return true;
-    if (c.isDeclined || c.isPendingRequest) return true;
-    return false;
+    return this.isTypingDisabled();
   });
 
   readonly isSendDisabled = computed(() => {
@@ -1104,25 +1182,55 @@ export class ChatDetailComponent implements OnDestroy {
 
   private setupDraftChat(targetUserId: string): void {
     this.messages.set([]);
-    this.usersService.searchUsers(' ').subscribe({
-      next: (users) => {
-        const found = users.find((u) => u.id === targetUserId);
-        if (found) {
-          this.chat.set({
-            id: `new-${targetUserId}`,
-            name: found.name,
-            username: `@${found.username}`,
-            initials: getInitials(found.name),
-            isOnline: true,
-            lastMessage: '',
-            time: '',
-            unreadCount: 0,
-            isPendingRequest: true,
-            photoUrl: found.avatarUrl,
-          });
+    this.loadError.set(null);
+
+    // 1. Immediately hydrate from cache if available (e.g. clicked from Find People)
+    const cached = this.usersService.getDraftUser();
+    if (cached && cached.id === targetUserId) {
+      this.chat.set({
+        id: `new-${targetUserId}`,
+        otherUserId: targetUserId,
+        name: cached.name,
+        username: `@${cached.username}`,
+        initials: getInitials(cached.name),
+        isOnline: false,
+        lastSeen: null,
+        lastMessage: '',
+        time: '',
+        unreadCount: 0,
+        isPendingRequest: true,
+        photoUrl: cached.avatarUrl,
+        rawStatus: 'pending',
+        rawState: 'pending_sent',
+      });
+    }
+
+    // 2. Fetch fresh user profile + presence from backend
+    this.usersService.getUserById(targetUserId).subscribe({
+      next: (user) => {
+        this.chat.set({
+          id: `new-${targetUserId}`,
+          otherUserId: targetUserId,
+          name: user.name,
+          username: `@${user.username}`,
+          initials: getInitials(user.name),
+          isOnline: !!user.isOnline,
+          lastSeen: user.lastSeen || null,
+          lastMessage: '',
+          time: '',
+          unreadCount: 0,
+          isPendingRequest: true,
+          photoUrl: user.avatarUrl,
+          rawStatus: 'pending',
+          rawState: 'pending_sent',
+        });
+      },
+      error: (err: HttpErrorResponse) => {
+        if (err?.status === 404) {
+          this.toast.error('User not found');
+          this.router.navigate(['/chats']);
         }
       },
-      error: () => {},
     });
   }
 
@@ -1251,7 +1359,17 @@ export class ChatDetailComponent implements OnDestroy {
     this.subscriptions.push(
       this.socketService.typingUpdate$.subscribe((data) => {
         const myId = this.authService.currentUser()?.id;
-        if (data.conversationId === this.chatId() && data.userId !== myId) {
+        if (data.userId === myId) return;
+
+        const currentChat = this.chat();
+        const otherUserId =
+          currentChat?.otherUserId ||
+          (this.chatId().startsWith('new-') ? this.chatId().replace('new-', '') : null);
+
+        if (
+          data.conversationId === this.chatId() ||
+          (otherUserId && (data.userId === otherUserId || data.conversationId === `new-${otherUserId}`))
+        ) {
           this.isTyping.set(data.isTyping);
         }
       })
@@ -1262,7 +1380,21 @@ export class ChatDetailComponent implements OnDestroy {
       this.socketService.presenceUpdate$.subscribe((data) => {
         const currentChat = this.chat();
         if (currentChat && !currentChat.isSelfNotes) {
-          this.chat.update((c) => (c ? { ...c, isOnline: data.isOnline } : null));
+          const otherUserId =
+            currentChat.otherUserId ||
+            (this.chatId().startsWith('new-') ? this.chatId().replace('new-', '') : null);
+
+          if (otherUserId && data.userId === otherUserId) {
+            this.chat.update((c) =>
+              c
+                ? {
+                    ...c,
+                    isOnline: data.isOnline,
+                    lastSeen: data.lastSeen !== undefined ? data.lastSeen : c.lastSeen,
+                  }
+                : null
+            );
+          }
         }
       })
     );
@@ -1352,9 +1484,49 @@ export class ChatDetailComponent implements OnDestroy {
 
   getStatusText(): string {
     if (this.isTyping()) {
-      return 'typing…';
+      return 'typing...';
     }
-    return this.chat()?.isOnline ? 'Online' : 'Offline';
+    const c = this.chat();
+    if (!c) return '';
+    if (c.isSelfNotes) {
+      return 'Message yourself';
+    }
+    if (c.isOnline) {
+      return 'Online';
+    }
+    if (c.lastSeen) {
+      return this.formatLastSeen(c.lastSeen);
+    }
+    return 'Offline';
+  }
+
+  private formatLastSeen(iso: string): string {
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return 'Offline';
+
+    const now = new Date();
+    const isToday =
+      d.getDate() === now.getDate() &&
+      d.getMonth() === now.getMonth() &&
+      d.getFullYear() === now.getFullYear();
+
+    const yesterday = new Date(now);
+    yesterday.setDate(now.getDate() - 1);
+    const isYesterday =
+      d.getDate() === yesterday.getDate() &&
+      d.getMonth() === yesterday.getMonth() &&
+      d.getFullYear() === yesterday.getFullYear();
+
+    const timeStr = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+
+    if (isToday) {
+      return `Last seen at ${timeStr}`;
+    }
+    if (isYesterday) {
+      return `Last seen yesterday at ${timeStr}`;
+    }
+    const dateStr = d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+    return `Last seen ${dateStr} at ${timeStr}`;
   }
 
   isNewDay(idx: number): boolean {
@@ -1387,6 +1559,10 @@ export class ChatDetailComponent implements OnDestroy {
 
   toggleAttachMenu(event: MouseEvent): void {
     event.stopPropagation();
+    if (this.isChatPendingOrLimited()) {
+      this.toast.info('Attachments are not allowed until your chat request is accepted.');
+      return;
+    }
     this.attachMenuOpen.update((o) => !o);
   }
 
@@ -1435,13 +1611,14 @@ export class ChatDetailComponent implements OnDestroy {
   onInputChange(): void {
     this.updateCursorPos();
     const id = this.chatId();
-    if (!id.startsWith('new-')) {
-      this.socketService.startTyping(id);
-      if (this.typingStopTimer) clearTimeout(this.typingStopTimer);
-      this.typingStopTimer = setTimeout(() => {
-        this.socketService.stopTyping(id);
-      }, 3000);
-    }
+    const recipientId =
+      this.chat()?.otherUserId || (id.startsWith('new-') ? id.replace('new-', '') : undefined);
+
+    this.socketService.startTyping(id, recipientId);
+    if (this.typingStopTimer) clearTimeout(this.typingStopTimer);
+    this.typingStopTimer = setTimeout(() => {
+      this.socketService.stopTyping(id, recipientId);
+    }, 3000);
   }
 
   updateCursorPos(): void {
@@ -1481,6 +1658,10 @@ export class ChatDetailComponent implements OnDestroy {
 
   triggerFileInput(type: 'image' | 'file'): void {
     this.attachMenuOpen.set(false);
+    if (this.isChatPendingOrLimited()) {
+      this.toast.info('Attachments are not allowed until your chat request is accepted.');
+      return;
+    }
     if (type === 'image') {
       this.imageInputRef?.nativeElement?.click();
     } else {
@@ -1492,6 +1673,12 @@ export class ChatDetailComponent implements OnDestroy {
     const input = event.target as HTMLInputElement;
     const file = input.files?.[0];
     if (!file) return;
+
+    if (this.isChatPendingOrLimited()) {
+      this.toast.info('Attachments are not allowed until your chat request is accepted.');
+      input.value = '';
+      return;
+    }
 
     try {
       let processedFile = file;

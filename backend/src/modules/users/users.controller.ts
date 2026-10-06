@@ -3,6 +3,7 @@ import { usersService } from './users.service';
 import { uploadsService } from '../uploads/uploads.service';
 import { sendSuccess } from '../../utils/response';
 import { BadRequestError } from '../../utils/errors';
+import { presenceService } from '../presence/presence.service';
 
 export class UsersController {
   async getMe(req: Request, res: Response, next: NextFunction): Promise<void> {
@@ -75,6 +76,29 @@ export class UsersController {
     try {
       const blocked = await usersService.getBlockedUsers(req.user!.userId);
       sendSuccess(res, { blocked });
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  async getUserById(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const targetUserId = String(req.params.id);
+      const user = await usersService.getProfile(targetUserId);
+      const isOnline = await presenceService.isOnline(targetUserId);
+      const lastSeen = await presenceService.getLastSeen(targetUserId);
+      sendSuccess(res, {
+        user: {
+          id: user.id,
+          username: user.username,
+          name: user.name,
+          avatarUrl: user.avatarUrl,
+          bio: user.bio,
+          statusMessage: user.statusMessage,
+          isOnline,
+          lastSeen,
+        },
+      });
     } catch (err) {
       next(err);
     }
