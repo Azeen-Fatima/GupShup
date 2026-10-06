@@ -96,27 +96,57 @@ import { EmptyStateComponent } from '../../../shared/components/empty-state/empt
               </div>
             </div>
           }
-        } @else if (filteredChats().length === 0) {
-          @if (searchQuery().trim()) {
+        } @else if (searchQuery().trim()) {
+          @if (filteredChats().length === 0) {
             <app-empty-state
               type="no-results"
               title="No chats found"
               [subtitle]="'No conversation matches \\'' + searchQuery() + '\\''"
             ></app-empty-state>
           } @else {
+            @for (chat of filteredChats(); track chat.id) {
+              <app-chat-row
+                [chat]="chat"
+                (rowClicked)="openChat(chat)"
+                (actionTriggered)="onRowAction($event)"
+              ></app-chat-row>
+            }
+          }
+        } @else {
+          <!-- Chat Requests Section (if any pending received requests) -->
+          @if (incomingRequests().length > 0) {
+            <div class="requests-section" role="region" aria-label="Chat requests">
+              <div class="requests-header">
+                <span class="requests-title">Requests</span>
+                <span class="requests-badge">{{ incomingRequests().length }}</span>
+              </div>
+              <div class="requests-list">
+                @for (chat of incomingRequests(); track chat.id) {
+                  <app-chat-row
+                    [chat]="chat"
+                    (rowClicked)="openChat(chat)"
+                    (actionTriggered)="onRowAction($event)"
+                  ></app-chat-row>
+                }
+              </div>
+            </div>
+          }
+
+          <!-- Regular Chats -->
+          @if (regularChats().length === 0 && incomingRequests().length === 0) {
             <app-empty-state
               type="no-chats"
               title="No chats yet"
               subtitle="Click the arrow below to find people and start a cozy conversation!"
             ></app-empty-state>
-          }
-        } @else {
-          @for (chat of filteredChats(); track chat.id) {
-            <app-chat-row
-              [chat]="chat"
-              (rowClicked)="openChat(chat)"
-              (actionTriggered)="onRowAction($event)"
-            ></app-chat-row>
+          } @else {
+            @for (chat of regularChats(); track chat.id) {
+              <app-chat-row
+                [chat]="chat"
+                (rowClicked)="openChat(chat)"
+                (actionTriggered)="onRowAction($event)"
+              ></app-chat-row>
+            }
           }
         }
       </div>
@@ -330,6 +360,44 @@ import { EmptyStateComponent } from '../../../shared/components/empty-state/empt
       gap: 2px;
     }
 
+    /* Requests section at top of chat list */
+    .requests-section {
+      margin-bottom: 6px;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 6px;
+    }
+
+    .requests-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 12px 6px;
+    }
+
+    .requests-title {
+      font-size: 11px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--muted);
+    }
+
+    .requests-badge {
+      background-color: var(--amber);
+      color: var(--on-amber);
+      font-size: 11px;
+      font-weight: 800;
+      padding: 1px 7px;
+      border-radius: 999px;
+      line-height: 1.4;
+    }
+
+    .requests-list {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
     /* Floating Arrow Button:
        Pinned at bottom center of the card.
        Fades out when sheet opens, fades in when sheet closes. */
@@ -507,6 +575,16 @@ export class ChatListComponent implements OnInit {
     const myId = myUser?.id;
     const myAvatar = myUser?.avatarUrl;
     return list.map((c) => formatConversationToChatItem(c, myId, myAvatar));
+  });
+
+  // Incoming requests (pending_received)
+  readonly incomingRequests = computed(() => {
+    return this.chats().filter((c) => c.isIncomingRequest);
+  });
+
+  // Regular chats (not incoming requests)
+  readonly regularChats = computed(() => {
+    return this.chats().filter((c) => !c.isIncomingRequest);
   });
 
   // Filtered chats by search query

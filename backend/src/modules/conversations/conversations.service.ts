@@ -96,20 +96,55 @@ export class ConversationsService {
         const isSelf = conv.userAId === conv.userBId;
         const otherUser = isSelf ? conv.userA : conv.userAId === userId ? conv.userB : conv.userA;
 
-        const isBlockedByMe = blocks.some((b) => b.blockerId === userId && b.blockedId === otherUser.id);
-        const isBlockedByThem = blocks.some((b) => b.blockerId === otherUser.id && b.blockedId === userId);
+        const isBlockedByMe =
+          blocks.some((b) => b.blockerId === userId && b.blockedId === otherUser.id) ||
+          (conv.status === 'blocked' && conv.blockedById === userId);
+        const isBlockedByThem =
+          blocks.some((b) => b.blockerId === otherUser.id && b.blockedId === userId) ||
+          (conv.status === 'blocked' && conv.blockedById === otherUser.id);
 
-        let state: 'normal' | 'pending_sent' | 'pending_received' | 'declined' | 'blocked_by_me' | 'isSelf' =
-          'normal';
+        // Blocker view: blocked chats move to Settings > Blocked
+        if (isBlockedByMe) {
+          return null;
+        }
+
+        // Recipient view of declined: declined chats move to Settings > Declined
+        if (conv.status === 'declined' && conv.requesterId !== userId) {
+          return null;
+        }
+
+        let state:
+          | 'normal'
+          | 'pending_sent'
+          | 'pending_received'
+          | 'declined'
+          | 'blocked_by_them'
+          | 'isSelf' = 'normal';
+        let effectiveBlockedByThem = false;
 
         if (isSelf) {
           state = 'isSelf';
-        } else if (isBlockedByMe) {
-          state = 'blocked_by_me';
+        } else if (isBlockedByThem) {
+          if (!conv.wasAccepted) {
+            // Silent block: Sender sees normal pending_sent state
+            state = 'pending_sent';
+            effectiveBlockedByThem = false;
+          } else {
+            state = 'blocked_by_them';
+            effectiveBlockedByThem = true;
+          }
         } else if (conv.status === 'declined') {
           state = 'declined';
         } else if (conv.status === 'pending') {
           state = conv.requesterId === userId ? 'pending_sent' : 'pending_received';
+        }
+
+        let canSendExtraMessage = false;
+        if (conv.status === 'declined' && conv.requesterId === userId && conv.declineCount === 1) {
+          const sentAfterDecline = conv.messages.filter(
+            (msg) => conv.declinedAt && msg.createdAt > conv.declinedAt && msg.senderId === userId
+          ).length;
+          canSendExtraMessage = sentAfterDecline === 0;
         }
 
         // Filter messages respecting clearedAt
@@ -132,11 +167,15 @@ export class ConversationsService {
 
         return {
           id: conv.id,
-          status: conv.status,
+          status:
+            conv.status === 'blocked' && !conv.wasAccepted && isBlockedByThem ? 'pending' : conv.status,
           state,
           isSelf,
-          isBlockedByMe,
-          isBlockedByThem,
+          isBlockedByMe: false,
+          isBlockedByThem: effectiveBlockedByThem,
+          declineCount: conv.declineCount,
+          declinedAt: conv.declinedAt,
+          canSendExtraMessage,
           createdAt: conv.createdAt,
           lastMessageAt: conv.lastMessageAt || conv.createdAt,
           otherUser: {
@@ -159,8 +198,8 @@ export class ConversationsService {
       })
     );
 
-    // Sort by lastMessageAt descending
-    return result.sort((a, b) => new Date(b.lastMessageAt).getTime() - new Date(a.lastMessageAt).getTime());
+    const filteredResult = result.filter(Boolean) as any[];
+    return filteredResult.sort((a, b) => new Date(b.lastMessageAt).getTime() - new Date(a.lastMessageAt).getTime());
   }
 
   /**
@@ -224,20 +263,52 @@ export class ConversationsService {
       },
     });
 
-    const isBlockedByMe = blocks.some((b) => b.blockerId === userId && b.blockedId === otherUser.id);
-    const isBlockedByThem = blocks.some((b) => b.blockerId === otherUser.id && b.blockedId === userId);
+    const isBlockedByMe =
+      blocks.some((b) => b.blockerId === userId && b.blockedId === otherUser.id) ||
+      (conv.status === 'blocked' && conv.blockedById === userId);
+    const isBlockedByThem =
+      blocks.some((b) => b.blockerId === otherUser.id && b.blockedId === userId) ||
+      (conv.status === 'blocked' && conv.blockedById === otherUser.id);
 
-    let state: 'normal' | 'pending_sent' | 'pending_received' | 'declined' | 'blocked_by_me' | 'isSelf' =
-      'normal';
+    let state:
+      | 'normal'
+      | 'pending_sent'
+      | 'pending_received'
+      | 'declined'
+      | 'blocked_by_me'
+      | 'blocked_by_them'
+      | 'isSelf' = 'normal';
+    let effectiveBlockedByThem = false;
 
     if (isSelf) {
       state = 'isSelf';
     } else if (isBlockedByMe) {
       state = 'blocked_by_me';
+    } else if (isBlockedByThem) {
+      if (!conv.wasAccepted) {
+        // Silent block while pending
+        state = 'pending_sent';
+        effectiveBlockedByThem = false;
+      } else {
+        state = 'blocked_by_them';
+        effectiveBlockedByThem = true;
+      }
     } else if (conv.status === 'declined') {
       state = 'declined';
     } else if (conv.status === 'pending') {
       state = conv.requesterId === userId ? 'pending_sent' : 'pending_received';
+    }
+
+    let canSendExtraMessage = false;
+    if (conv.status === 'declined' && conv.requesterId === userId && conv.declineCount === 1) {
+      const extraSent = await prisma.message.count({
+        where: {
+          conversationId,
+          senderId: userId,
+          ...(conv.declinedAt ? { createdAt: { gt: conv.declinedAt } } : {}),
+        },
+      });
+      canSendExtraMessage = extraSent === 0;
     }
 
     const isOnline = isSelf ? true : await presenceService.isOnline(otherUser.id);
@@ -245,11 +316,15 @@ export class ConversationsService {
 
     return {
       id: conv.id,
-      status: conv.status,
+      status:
+        conv.status === 'blocked' && !conv.wasAccepted && isBlockedByThem ? 'pending' : conv.status,
       state,
       isSelf,
       isBlockedByMe,
-      isBlockedByThem,
+      isBlockedByThem: effectiveBlockedByThem,
+      declineCount: conv.declineCount,
+      declinedAt: conv.declinedAt,
+      canSendExtraMessage,
       requesterId: conv.requesterId,
       createdAt: conv.createdAt,
       lastMessageAt: conv.lastMessageAt,
@@ -281,6 +356,7 @@ export class ConversationsService {
             userBId: userId,
             requesterId: userId,
             status: 'accepted',
+            wasAccepted: true,
           },
         });
         await prisma.conversationMember.create({
@@ -298,18 +374,14 @@ export class ConversationsService {
       throw new NotFoundError('Recipient user not found', 'USER_NOT_FOUND');
     }
 
-    // Check if blocked in either direction
-    const block = await prisma.block.findFirst({
+    // Check if current user blocked the recipient
+    const iBlockedRecipient = await prisma.block.findUnique({
       where: {
-        OR: [
-          { blockerId: userId, blockedId: recipientId },
-          { blockerId: recipientId, blockedId: userId },
-        ],
+        blockerId_blockedId: { blockerId: userId, blockedId: recipientId },
       },
     });
-
-    if (block) {
-      throw new ForbiddenError('You cannot message this user', 'USER_BLOCKED');
+    if (iBlockedRecipient) {
+      throw new ForbiddenError('You blocked this user. Unblock to message them.', 'USER_BLOCKED');
     }
 
     const [userAId, userBId] = userId < recipientId ? [userId, recipientId] : [recipientId, userId];
@@ -319,49 +391,120 @@ export class ConversationsService {
       include: { members: true },
     });
 
+    // Check if recipient blocked the current user
+    const recipientBlockedMe = await prisma.block.findUnique({
+      where: {
+        blockerId_blockedId: { blockerId: recipientId, blockedId: userId },
+      },
+    });
+
+    let isSilentBlock = false;
+    if (recipientBlockedMe) {
+      if (conv && !conv.wasAccepted) {
+        isSilentBlock = true;
+      } else {
+        throw new ForbiddenError("You can't message this person right now.", 'USER_BLOCKED');
+      }
+    }
+
+    // Check attachments for request messages
+    const hasAttachment =
+      data.initialMessage &&
+      typeof data.initialMessage === 'object' &&
+      (data.initialMessage.type !== 'text' || !!data.initialMessage.attachmentUrl);
+
     if (conv) {
       if (conv.status === 'declined') {
         if (conv.requesterId === userId) {
-          throw new ForbiddenError(
-            'Your previous message request was declined by this user',
-            'REQUEST_DECLINED'
-          );
-        } else {
-          // Current user was the recipient who previously declined, but is now starting a conversation
+          if (conv.declineCount >= 2) {
+            throw new ForbiddenError(
+              'Request declined. You can message again if they accept.',
+              'REQUEST_DECLINED'
+            );
+          }
+
+          // Check if sender already used their 1 extra message
+          const extraSent = await prisma.message.count({
+            where: {
+              conversationId: conv.id,
+              senderId: userId,
+              ...(conv.declinedAt ? { createdAt: { gt: conv.declinedAt } } : {}),
+            },
+          });
+          if (extraSent >= 1) {
+            throw new ForbiddenError(
+              'Request declined. You can message again if they accept.',
+              'REQUEST_DECLINED'
+            );
+          }
+
+          if (hasAttachment) {
+            throw new ForbiddenError(
+              'Attachments are not allowed for message requests',
+              'ATTACHMENTS_NOT_ALLOWED'
+            );
+          }
+
+          // Move back to pending for recipient
           conv = await prisma.conversation.update({
             where: { id: conv.id },
-            data: { status: 'accepted' },
+            data: { status: 'pending' },
             include: { members: true },
           });
+        } else {
+          // Recipient is replying: accept conversation
+          conv = await prisma.conversation.update({
+            where: { id: conv.id },
+            data: { status: 'accepted', wasAccepted: true },
+            include: { members: true },
+          });
+          emitToUser(conv.requesterId, 'request:accepted', { conversationId: conv.id });
         }
-      } else if (conv.status === 'pending') {
+      } else if (conv.status === 'pending' || (conv.status === 'blocked' && isSilentBlock)) {
         if (conv.requesterId === userId) {
+          if (hasAttachment) {
+            throw new ForbiddenError(
+              'Attachments are not allowed for message requests',
+              'ATTACHMENTS_NOT_ALLOWED'
+            );
+          }
+
           const sentCount = await prisma.message.count({
             where: { conversationId: conv.id, senderId: userId },
           });
           if (sentCount >= 1) {
             throw new ForbiddenError(
               'You can only send 1 message until your request is accepted',
-              'MAX_PENDING_MESSAGES_REACHED'
+              'REQUEST_PENDING_LIMIT'
             );
           }
         } else {
-          // Requester was the other user, current user is replying: automatically accept!
+          // Recipient replying: accept conversation
           conv = await prisma.conversation.update({
             where: { id: conv.id },
-            data: { status: 'accepted' },
+            data: { status: 'accepted', wasAccepted: true },
             include: { members: true },
           });
+          emitToUser(conv.requesterId, 'request:accepted', { conversationId: conv.id });
         }
       }
     } else {
-      // Create new conversation and members
+      // New conversation
+      if (hasAttachment) {
+        throw new ForbiddenError(
+          'Attachments are not allowed for message requests',
+          'ATTACHMENTS_NOT_ALLOWED'
+        );
+      }
+
       conv = await prisma.conversation.create({
         data: {
           userAId,
           userBId,
           requesterId: userId,
           status: 'pending',
+          declineCount: 0,
+          wasAccepted: false,
           members: {
             create: [{ userId }, { userId: recipientId }],
           },
@@ -370,7 +513,7 @@ export class ConversationsService {
       });
     }
 
-    return this.sendInitialMessage(conv.id, userId, data, recipientId);
+    return this.sendInitialMessage(conv.id, userId, data, recipientId, isSilentBlock);
   }
 
   /**
@@ -380,7 +523,8 @@ export class ConversationsService {
     conversationId: string,
     senderId: string,
     data: CreateConversationInput,
-    recipientId?: string
+    recipientId?: string,
+    isSilent = false
   ) {
     let msgType = 'text';
     let body: string | null = null;
@@ -437,9 +581,13 @@ export class ConversationsService {
       }),
     ]);
 
-    // Emit socket event if recipient exists
-    if (recipientId && recipientId !== senderId) {
+    // Emit socket event if recipient exists and not silent
+    if (recipientId && recipientId !== senderId && !isSilent) {
       emitToUser(recipientId, 'message:new', {
+        conversationId,
+        message,
+      });
+      emitToUser(recipientId, 'request:new', {
         conversationId,
         message,
       });
@@ -455,7 +603,7 @@ export class ConversationsService {
   }
 
   /**
-   * Accept pending conversation request
+   * Accept pending conversation request (Works from Requests, Declined, and after Unblock)
    */
   async acceptConversation(conversationId: string, userId: string) {
     const conv = await prisma.conversation.findUnique({
@@ -476,19 +624,47 @@ export class ConversationsService {
       throw new BadRequestError('You cannot accept your own request', 'CANNOT_ACCEPT_OWN_REQUEST');
     }
 
-    const updated = await prisma.conversation.update({
-      where: { id: conversationId },
-      data: { status: 'accepted' },
+    const targetUserId = conv.userAId === userId ? conv.userBId : conv.userAId;
+
+    // Clear any active blocks between them when accepted
+    await prisma.block.deleteMany({
+      where: {
+        OR: [
+          { blockerId: userId, blockedId: targetUserId },
+          { blockerId: targetUserId, blockedId: userId },
+        ],
+      },
     });
 
-    // Notify other member
+    const updated = await prisma.conversation.update({
+      where: { id: conversationId },
+      data: {
+        status: 'accepted',
+        wasAccepted: true,
+        blockedAt: null,
+        blockedById: null,
+      },
+    });
+
+    // Notify other member and current user
     const otherMember = conv.members.find((m) => m.userId !== userId);
     if (otherMember) {
+      emitToUser(otherMember.userId, 'request:accepted', {
+        conversationId,
+      });
       emitToUser(otherMember.userId, 'conversation:updated', {
         conversationId,
         status: 'accepted',
       });
     }
+
+    emitToUser(userId, 'request:accepted', {
+      conversationId,
+    });
+    emitToUser(userId, 'conversation:updated', {
+      conversationId,
+      status: 'accepted',
+    });
 
     return updated;
   }
@@ -515,19 +691,40 @@ export class ConversationsService {
       throw new BadRequestError('You cannot decline your own request', 'CANNOT_DECLINE_OWN_REQUEST');
     }
 
+    const nextDeclineCount = conv.declineCount + 1;
+
     const updated = await prisma.conversation.update({
       where: { id: conversationId },
-      data: { status: 'declined' },
+      data: {
+        status: 'declined',
+        declineCount: nextDeclineCount,
+        declinedAt: new Date(),
+      },
     });
 
-    // Notify other member
+    // Notify requester and recipient
     const otherMember = conv.members.find((m) => m.userId !== userId);
     if (otherMember) {
+      emitToUser(otherMember.userId, 'request:declined', {
+        conversationId,
+        declineCount: nextDeclineCount,
+      });
       emitToUser(otherMember.userId, 'conversation:updated', {
         conversationId,
         status: 'declined',
+        declineCount: nextDeclineCount,
       });
     }
+
+    emitToUser(userId, 'request:declined', {
+      conversationId,
+      declineCount: nextDeclineCount,
+    });
+    emitToUser(userId, 'conversation:updated', {
+      conversationId,
+      status: 'declined',
+      declineCount: nextDeclineCount,
+    });
 
     return updated;
   }
@@ -549,6 +746,7 @@ export class ConversationsService {
     }
 
     const targetUserId = conv.userAId === userId ? conv.userBId : conv.userAId;
+    const isSilentBlock = conv.status === 'pending' || conv.status === 'declined' || !conv.wasAccepted;
 
     await prisma.block.upsert({
       where: {
@@ -561,8 +759,24 @@ export class ConversationsService {
       },
     });
 
-    emitToUser(userId, 'conversation:updated', { conversationId, blocked: true });
-    emitToUser(targetUserId, 'conversation:updated', { conversationId, blockedByOther: true });
+    await prisma.conversation.update({
+      where: { id: conversationId },
+      data: {
+        status: 'blocked',
+        blockedAt: new Date(),
+        blockedById: userId,
+      },
+    });
+
+    // Blocker gets updated list
+    emitToUser(userId, 'conversation:updated', { conversationId });
+
+    // Target user:
+    // If blocked while pending: SILENT (must NOT learn about the block)
+    // If blocked after accepted: NEUTRAL conversation:updated event
+    if (!isSilentBlock) {
+      emitToUser(targetUserId, 'conversation:updated', { conversationId });
+    }
 
     return { success: true };
   }
@@ -612,8 +826,20 @@ export class ConversationsService {
     });
 
     if (conv) {
-      emitToUser(userId, 'conversation:updated', { conversationId: conv.id, blocked: false });
-      emitToUser(targetUserId, 'conversation:updated', { conversationId: conv.id, blockedByOther: false });
+      // Unblock returns the chat to PENDING (Accept / Decline again)
+      await prisma.conversation.update({
+        where: { id: conv.id },
+        data: {
+          status: 'pending',
+          blockedAt: null,
+          blockedById: null,
+          wasAccepted: false,
+        },
+      });
+
+      emitToUser(userId, 'conversation:updated', { conversationId: conv.id });
+      emitToUser(userId, 'request:new', { conversationId: conv.id });
+      emitToUser(targetUserId, 'conversation:updated', { conversationId: conv.id });
     }
 
     return { success: true };

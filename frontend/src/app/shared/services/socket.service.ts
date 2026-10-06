@@ -56,6 +56,9 @@ export class SocketService implements OnDestroy {
   readonly typingUpdate$ = new Subject<TypingUpdatePayload>();
   readonly conversationUpdated$ = new Subject<{ conversationId: string; [key: string]: any }>();
   readonly userUpdated$ = new Subject<UserUpdatedPayload>();
+  readonly requestNew$ = new Subject<{ conversationId: string; [key: string]: any }>();
+  readonly requestAccepted$ = new Subject<{ conversationId: string; [key: string]: any }>();
+  readonly requestDeclined$ = new Subject<{ conversationId: string; [key: string]: any }>();
 
   constructor() {
     // Automatically manage connection lifecycle based on authentication signal
@@ -125,6 +128,21 @@ export class SocketService implements OnDestroy {
 
     this.socket.on('conversation:updated', (data: any) => {
       this.conversationUpdated$.next(data);
+      this.conversationsService.loadConversations().subscribe();
+    });
+
+    this.socket.on('request:new', (data: any) => {
+      this.requestNew$.next(data);
+      this.conversationsService.loadConversations().subscribe();
+    });
+
+    this.socket.on('request:accepted', (data: any) => {
+      this.requestAccepted$.next(data);
+      this.conversationsService.loadConversations().subscribe();
+    });
+
+    this.socket.on('request:declined', (data: any) => {
+      this.requestDeclined$.next(data);
       this.conversationsService.loadConversations().subscribe();
     });
 

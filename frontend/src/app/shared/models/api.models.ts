@@ -38,15 +38,19 @@ export type ConversationState =
   | 'pending_received'
   | 'declined'
   | 'blocked_by_me'
+  | 'blocked_by_them'
   | 'isSelf';
 
 export interface ConversationItem {
   id: string;
-  status: 'pending' | 'accepted' | 'declined';
+  status: 'pending' | 'accepted' | 'declined' | 'blocked';
   state: ConversationState;
   isSelf: boolean;
   isBlockedByMe: boolean;
   isBlockedByThem: boolean;
+  declineCount?: number;
+  declinedAt?: string | null;
+  canSendExtraMessage?: boolean;
   createdAt: string;
   lastMessageAt: string;
   otherUser: {
@@ -124,6 +128,7 @@ export interface DeclinedItem {
     statusMessage?: string | null;
   };
   declinedAt: string;
+  declineCount?: number;
 }
 
 export interface BlockedItem {
@@ -179,8 +184,9 @@ export function formatConversationToChatItem(
 
   const isPendingRequest = conv.state === 'pending_sent';
   const isIncomingRequest = conv.state === 'pending_received';
-  const isDeclined = conv.state === 'declined';
+  const isDeclined = conv.state === 'declined' || conv.status === 'declined';
   const isBlocked = conv.state === 'blocked_by_me' || conv.isBlockedByMe;
+  const isBlockedByThem = conv.state === 'blocked_by_them' || conv.isBlockedByThem;
 
   return {
     id: conv.id,
@@ -194,10 +200,16 @@ export function formatConversationToChatItem(
     status,
     isDeclined,
     isBlocked,
+    isBlockedByThem,
     isPendingRequest,
     isIncomingRequest,
     isSelfNotes: isMe,
     photoUrl: (isMe && currentUserAvatarUrl) ? currentUserAvatarUrl : (conv.otherUser.avatarUrl || null),
+    declineCount: conv.declineCount ?? 0,
+    declinedAt: conv.declinedAt || null,
+    canSendExtraMessage: conv.canSendExtraMessage ?? false,
+    rawState: conv.state,
+    rawStatus: conv.status,
   };
 }
 

@@ -39,7 +39,12 @@ model Conversation {
   userAId       String
   userBId       String
   requesterId   String
-  status        String    @default("pending") // pending | accepted | declined
+  status        String    @default("pending") // pending | accepted | declined | blocked
+  declineCount  Int       @default(0)
+  declinedAt    DateTime?
+  blockedAt     DateTime?
+  blockedById   String?
+  wasAccepted   Boolean   @default(false)
   createdAt     DateTime  @default(now())
   lastMessageAt DateTime?
 

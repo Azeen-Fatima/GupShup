@@ -158,16 +158,31 @@ export class UsersService {
   }
 
   /**
-   * Search users excluding current user, with relationship status
+   * Search users excluding current user and blocked users in both directions, with relationship status
    */
   async searchUsers(currentUserId: string, query: string) {
     const trimmed = query.trim();
     if (!trimmed) return [];
 
+    // Find all blocks involving currentUserId (either direction)
+    const blocks = await prisma.block.findMany({
+      where: {
+        OR: [{ blockerId: currentUserId }, { blockedId: currentUserId }],
+      },
+      select: { blockerId: true, blockedId: true },
+    });
+
+    const excludedUserIds = new Set<string>();
+    excludedUserIds.add(currentUserId);
+    for (const b of blocks) {
+      if (b.blockerId === currentUserId) excludedUserIds.add(b.blockedId);
+      if (b.blockedId === currentUserId) excludedUserIds.add(b.blockerId);
+    }
+
     // Find up to 30 matching users
     const users = await prisma.user.findMany({
       where: {
-        id: { not: currentUserId },
+        id: { notIn: Array.from(excludedUserIds) },
         OR: [
           { username: { contains: trimmed, mode: 'insensitive' } },
           { name: { contains: trimmed, mode: 'insensitive' } },
@@ -190,16 +205,6 @@ export class UsersService {
 
     const targetUserIds = users.map((u) => u.id);
 
-    // Fetch blocks in either direction
-    const blocks = await prisma.block.findMany({
-      where: {
-        OR: [
-          { blockerId: currentUserId, blockedId: { in: targetUserIds } },
-          { blockerId: { in: targetUserIds }, blockedId: currentUserId },
-        ],
-      },
-    });
-
     // Fetch conversations between current user and target users
     const conversations = await prisma.conversation.findMany({
       where: {
@@ -212,25 +217,6 @@ export class UsersService {
 
     // Map relationships
     return users.map((target) => {
-      // Check block status
-      const blockedByMe = blocks.some((b) => b.blockerId === currentUserId && b.blockedId === target.id);
-      if (blockedByMe) {
-        return {
-          ...target,
-          relationshipStatus: 'blocked_by_me' as RelationshipStatus,
-          conversationId: undefined,
-        };
-      }
-
-      const blockedByThem = blocks.some((b) => b.blockerId === target.id && b.blockedId === currentUserId);
-      if (blockedByThem) {
-        return {
-          ...target,
-          relationshipStatus: 'blocked_by_them' as RelationshipStatus,
-          conversationId: undefined,
-        };
-      }
-
       // Check conversation status
       const conv = conversations.find(
         (c) =>
@@ -290,7 +276,8 @@ export class UsersService {
     return declinedConversations.map((c) => ({
       conversationId: c.id,
       user: c.requester,
-      declinedAt: c.createdAt,
+      declinedAt: c.declinedAt ?? c.createdAt,
+      declineCount: c.declineCount,
     }));
   }
 

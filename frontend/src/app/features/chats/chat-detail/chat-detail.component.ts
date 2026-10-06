@@ -87,21 +87,40 @@ import { EmptyStateComponent } from '../../../shared/components/empty-state/empt
 
             @if (headerMenuOpen()) {
               <div class="ctx-menu-header" role="menu">
-                @if (chat()!.isBlocked) {
-                  <button type="button" class="menu-item" (click)="unblockCurrentChat()" role="menuitem">
-                    Unblock
+                @if (chat()!.isSelfNotes) {
+                  <!-- Notes to Self: only Clear chat -->
+                  <button type="button" class="menu-item" (click)="promptClearChat()" role="menuitem">
+                    Clear chat
                   </button>
+                } @else if (chat()!.isIncomingRequest) {
+                  <!-- Received pending: only Block -->
+                  @if (chat()!.isBlocked) {
+                    <button type="button" class="menu-item" (click)="unblockCurrentChat()" role="menuitem">
+                      Unblock
+                    </button>
+                  } @else {
+                    <button type="button" class="menu-item danger" (click)="promptBlockChat()" role="menuitem">
+                      Block user
+                    </button>
+                  }
                 } @else {
-                  <button type="button" class="menu-item danger" (click)="promptBlockChat()" role="menuitem">
-                    Block user
+                  <!-- After accepted: Block, Clear, Delete -->
+                  @if (chat()!.isBlocked) {
+                    <button type="button" class="menu-item" (click)="unblockCurrentChat()" role="menuitem">
+                      Unblock
+                    </button>
+                  } @else {
+                    <button type="button" class="menu-item danger" (click)="promptBlockChat()" role="menuitem">
+                      Block user
+                    </button>
+                  }
+                  <button type="button" class="menu-item" (click)="promptClearChat()" role="menuitem">
+                    Clear chat
+                  </button>
+                  <button type="button" class="menu-item danger" (click)="promptDeleteChat()" role="menuitem">
+                    Delete chat
                   </button>
                 }
-                <button type="button" class="menu-item" (click)="promptClearChat()" role="menuitem">
-                  Clear chat
-                </button>
-                <button type="button" class="menu-item danger" (click)="promptDeleteChat()" role="menuitem">
-                  Delete chat
-                </button>
               </div>
             }
           </div>
@@ -170,14 +189,6 @@ import { EmptyStateComponent } from '../../../shared/components/empty-state/empt
         }
       </div>
 
-      <!-- Sender side: Pending Request Notification Note -->
-      @if (chat()?.isPendingRequest && !chat()?.isBlocked) {
-        <div class="pending-notice-bar" role="status">
-          <app-svg-icon name="chat" [size]="14"></app-svg-icon>
-          <span>Waiting for {{ chat()!.name }} to accept your request</span>
-        </div>
-      }
-
       <!-- Receiver side: Request Action Bar (Accept, Decline, Block) -->
       @if (chat()?.isIncomingRequest && !chat()?.isBlocked) {
         <div class="incoming-request-bar" role="region" aria-label="Chat invitation">
@@ -195,6 +206,14 @@ import { EmptyStateComponent } from '../../../shared/components/empty-state/empt
               Block
             </button>
           </div>
+        </div>
+      }
+
+      <!-- Sender side: Notice Bar (Pending, 1st decline extra message, 2nd decline locked) -->
+      @if (senderComposerNote(); as note) {
+        <div class="pending-notice-bar" role="status">
+          <app-svg-icon name="chat" [size]="14"></app-svg-icon>
+          <span>{{ note }}</span>
         </div>
       }
 
@@ -264,11 +283,16 @@ import { EmptyStateComponent } from '../../../shared/components/empty-state/empt
             Unblock
           </button>
         </div>
+      } @else if (chat()?.isBlockedByThem) {
+        <!-- Blocked after accepted by other user: NEVER show the word blocked -->
+        <div class="blocked-composer-strip neutral">
+          <span>You can't message this person right now.</span>
+        </div>
       } @else {
         <!-- Message Input Composer (Fixed at the bottom of the card) -->
         <form
           class="chat-composer"
-          [class.disabled]="chat()?.isIncomingRequest"
+          [class.disabled]="isTypingDisabled()"
           (ngSubmit)="sendCurrentMessage()"
           autocomplete="off"
         >
@@ -276,7 +300,7 @@ import { EmptyStateComponent } from '../../../shared/components/empty-state/empt
           <button
             type="button"
             class="composer-icon-btn"
-            [disabled]="chat()?.isIncomingRequest"
+            [disabled]="isTypingDisabled()"
             [title]="emojiPickerOpen() ? 'Close emoji picker' : 'Add emoji'"
             [attr.aria-label]="emojiPickerOpen() ? 'Close emoji picker' : 'Add emoji'"
             (pointerdown)="$event.preventDefault()"
@@ -294,7 +318,7 @@ import { EmptyStateComponent } from '../../../shared/components/empty-state/empt
           <button
             type="button"
             class="composer-icon-btn"
-            [disabled]="chat()?.isIncomingRequest"
+            [disabled]="isAttachDisabled()"
             title="Attach file or photo"
             aria-label="Attach file or photo"
             (click)="toggleAttachMenu($event)"
@@ -307,8 +331,8 @@ import { EmptyStateComponent } from '../../../shared/components/empty-state/empt
             type="text"
             name="messageText"
             [(ngModel)]="inputText"
-            [disabled]="chat()?.isIncomingRequest || false"
-            [placeholder]="chat()?.isIncomingRequest ? 'Accept invitation to reply…' : 'Type a message…'"
+            [disabled]="isTypingDisabled()"
+            [placeholder]="composerPlaceholder()"
             class="composer-input"
             aria-label="Type a message"
             [attr.inputmode]="emojiPickerOpen() ? 'none' : 'text'"
@@ -324,7 +348,7 @@ import { EmptyStateComponent } from '../../../shared/components/empty-state/empt
             class="send-btn"
             (pointerdown)="$event.preventDefault()"
             (mousedown)="$event.preventDefault()"
-            [disabled]="(!inputText().trim() && !pendingAttachment()) || chat()?.isIncomingRequest"
+            [disabled]="isSendDisabled()"
             title="Send message"
             aria-label="Send message"
           >
@@ -708,6 +732,11 @@ import { EmptyStateComponent } from '../../../shared/components/empty-state/empt
       align-items: center;
       justify-content: space-between;
       flex-shrink: 0;
+
+      &.neutral {
+        justify-content: center;
+        text-align: center;
+      }
     }
 
     .teal-unblock-btn {
@@ -970,6 +999,64 @@ export class ChatDetailComponent implements OnDestroy {
   readonly chat = signal<ChatItem | null>(null);
   readonly messages = signal<ChatMessage[]>([]);
 
+  readonly senderComposerNote = computed(() => {
+    const c = this.chat();
+    if (!c || c.isSelfNotes || c.isIncomingRequest || c.isBlocked || c.isBlockedByThem) {
+      return null;
+    }
+
+    if (c.isDeclined) {
+      if (c.canSendExtraMessage) {
+        return 'Request was declined. You can now send 1 more message.';
+      }
+      return 'Request declined. You can message again if they accept.';
+    }
+
+    if (c.isPendingRequest) {
+      if (this.messages().length >= 1) {
+        return `Waiting for ${c.name} to accept your request. You can only send one message until they accept.`;
+      }
+    }
+
+    return null;
+  });
+
+  readonly isTypingDisabled = computed(() => {
+    const c = this.chat();
+    if (!c) return true;
+    if (c.isIncomingRequest || c.isBlocked || c.isBlockedByThem) return true;
+    if (c.isDeclined) {
+      return !c.canSendExtraMessage;
+    }
+    if (c.isPendingRequest) {
+      return this.messages().length >= 1;
+    }
+    return false;
+  });
+
+  readonly isAttachDisabled = computed(() => {
+    const c = this.chat();
+    if (!c) return true;
+    if (c.isIncomingRequest || c.isBlocked || c.isBlockedByThem) return true;
+    if (c.isDeclined || c.isPendingRequest) return true;
+    return false;
+  });
+
+  readonly isSendDisabled = computed(() => {
+    if (this.isTypingDisabled()) return true;
+    return !this.inputText().trim() && !this.pendingAttachment();
+  });
+
+  readonly composerPlaceholder = computed(() => {
+    const c = this.chat();
+    if (!c) return 'Type a message…';
+    if (c.isIncomingRequest) return 'Accept invitation to reply…';
+    if (c.isBlockedByThem) return "You can't message this person right now.";
+    if (c.isDeclined && !c.canSendExtraMessage) return 'Request declined. You can message again if they accept.';
+    if (c.isPendingRequest && this.messages().length >= 1) return 'You can only send one message until they accept.';
+    return 'Type a message…';
+  });
+
   private lastSelectionStart = 0;
   private lastSelectionEnd = 0;
   private typingStopTimer: any = null;
@@ -1197,6 +1284,44 @@ export class ChatDetailComponent implements OnDestroy {
         }
       })
     );
+
+    // 6. Real-time conversation and request state updates
+    this.subscriptions.push(
+      this.socketService.conversationUpdated$.subscribe((data) => {
+        if (data.conversationId === this.chatId()) {
+          this.reloadConversationMetadata();
+        }
+      })
+    );
+
+    this.subscriptions.push(
+      this.socketService.requestAccepted$.subscribe((data) => {
+        if (data.conversationId === this.chatId()) {
+          this.reloadConversationMetadata();
+        }
+      })
+    );
+
+    this.subscriptions.push(
+      this.socketService.requestDeclined$.subscribe((data) => {
+        if (data.conversationId === this.chatId()) {
+          this.reloadConversationMetadata();
+        }
+      })
+    );
+  }
+
+  private reloadConversationMetadata(): void {
+    const id = this.chatId();
+    if (!id || id.startsWith('new-')) return;
+    const myId = this.authService.currentUser()?.id;
+    const myAvatar = this.authService.currentUser()?.avatarUrl;
+    this.conversationsService.getConversationById(id).subscribe({
+      next: (conv) => {
+        this.chat.set(formatConversationToChatItem(conv, myId, myAvatar));
+      },
+      error: () => {},
+    });
   }
 
   @HostListener('document:click')
@@ -1501,7 +1626,7 @@ export class ChatDetailComponent implements OnDestroy {
       },
       error: (err) => {
         this.markMessageFailed(tempId);
-        this.toast.error(err?.error?.error?.message || 'Failed to send message');
+        this.handleMessageError(err);
       },
     });
   }
@@ -1514,12 +1639,30 @@ export class ChatDetailComponent implements OnDestroy {
         this.upsertMessage(formatted, tempId);
         this.scrollToBottom();
       },
-      error: () => {
+      error: (err) => {
         if (tempId) {
           this.markMessageFailed(tempId);
         }
+        this.handleMessageError(err);
       },
     });
+  }
+
+  private handleMessageError(err: any): void {
+    const code = err?.error?.error?.code || err?.error?.code;
+    const message = err?.error?.error?.message || err?.error?.message;
+
+    if (code === 'REQUEST_PENDING_LIMIT') {
+      this.toast.error('You can only send one message until they accept.');
+    } else if (code === 'REQUEST_DECLINED') {
+      this.toast.error('Request declined. You can message again if they accept.');
+    } else if (code === 'ATTACHMENTS_NOT_ALLOWED') {
+      this.toast.error('Attachments are not allowed for message requests.');
+    } else if (code === 'USER_BLOCKED') {
+      this.toast.error("You can't message this person right now.");
+    } else {
+      this.toast.error(message || 'Failed to send message');
+    }
   }
 
   private markMessageFailed(tempId: string): void {

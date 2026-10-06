@@ -41,10 +41,16 @@ export interface ChatItem {
   status?: 'sent' | 'seen' | 'pending' | 'failed';
   isDeclined?: boolean;
   isBlocked?: boolean;
+  isBlockedByThem?: boolean;
   isPendingRequest?: boolean;   // Sender side (waiting for recipient to accept)
   isIncomingRequest?: boolean;  // Receiver side (X wants to message you)
   isSelfNotes?: boolean;
   photoUrl?: string | null;
+  declineCount?: number;
+  declinedAt?: string | null;
+  canSendExtraMessage?: boolean;
+  rawState?: string;
+  rawStatus?: string;
 }
 
 export interface DeclinedRequest {

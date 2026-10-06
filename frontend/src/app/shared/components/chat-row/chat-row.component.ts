@@ -19,15 +19,13 @@ import { ChatItem } from '../../mock/mock-data';
   template: `
     <div
       class="chat-row"
-      [class.faded]="isFaded()"
       [class.unread]="chat().unreadCount > 0"
       (click)="onRowClick($event)"
       role="button"
-      [attr.tabindex]="isFaded() ? -1 : 0"
+      tabindex="0"
       [attr.aria-label]="chat().name + (chat().unreadCount ? ', ' + chat().unreadCount + ' unread messages' : '')"
       (keydown.enter)="onRowClick($event)"
     >
-      <!-- Content wrapper that gets faded if declined or blocked -->
       <div class="row-content">
         <app-avatar
           [avatarUrl]="chat().photoUrl"
@@ -63,9 +61,7 @@ import { ChatItem } from '../../mock/mock-data';
               {{ chat().lastMessage }}
             </span>
 
-            @if (isFaded()) {
-              <span class="time">{{ chat().time }}</span>
-            } @else if (chat().unreadCount > 0) {
+            @if (chat().unreadCount > 0) {
               <span class="badge" [attr.aria-label]="chat().unreadCount + ' unread'">
                 {{ chat().unreadCount }}
               </span>
@@ -74,21 +70,42 @@ import { ChatItem } from '../../mock/mock-data';
         </div>
       </div>
 
-      <!-- Action wrapper (kebab and context menu) - NEVER faded, always 100% opacity -->
+      <!-- Action wrapper (kebab and context menu) -->
       <div class="action-wrap" (click)="$event.stopPropagation()">
-        @if (!chat().isSelfNotes) {
-          <button
-            type="button"
-            class="kebab-btn"
-            (click)="toggleMenu($event)"
-            [attr.aria-expanded]="menuOpen()"
-            [attr.aria-label]="'More options for ' + chat().name"
-          >
-            <app-svg-icon name="more" [size]="18"></app-svg-icon>
-          </button>
+        <button
+          type="button"
+          class="kebab-btn"
+          (click)="toggleMenu($event)"
+          [attr.aria-expanded]="menuOpen()"
+          [attr.aria-label]="'More options for ' + chat().name"
+        >
+          <app-svg-icon name="more" [size]="18"></app-svg-icon>
+        </button>
 
-          @if (menuOpen()) {
-            <div class="ctx-menu" role="menu">
+        @if (menuOpen()) {
+          <div class="ctx-menu" role="menu">
+            @if (chat().isSelfNotes) {
+              <!-- Notes to Self: only Clear chat -->
+              <button
+                type="button"
+                class="menu-item"
+                (click)="handleAction('clear')"
+                role="menuitem"
+              >
+                Clear chat
+              </button>
+            } @else if (chat().isIncomingRequest) {
+              <!-- Received pending: only Block -->
+              <button
+                type="button"
+                class="menu-item danger"
+                (click)="handleAction('block')"
+                role="menuitem"
+              >
+                Block
+              </button>
+            } @else {
+              <!-- After accepted: Block, Clear, Delete -->
               @if (chat().isBlocked) {
                 <button
                   type="button"
@@ -98,32 +115,7 @@ import { ChatItem } from '../../mock/mock-data';
                 >
                   Unblock
                 </button>
-                <button
-                  type="button"
-                  class="menu-item danger"
-                  (click)="handleAction('delete')"
-                  role="menuitem"
-                >
-                  Delete chat
-                </button>
-              } @else if (chat().isDeclined) {
-                <button
-                  type="button"
-                  class="menu-item danger"
-                  (click)="handleAction('delete')"
-                  role="menuitem"
-                >
-                  Delete chat
-                </button>
               } @else {
-                <button
-                  type="button"
-                  class="menu-item"
-                  (click)="handleAction('delete')"
-                  role="menuitem"
-                >
-                  Delete chat
-                </button>
                 <button
                   type="button"
                   class="menu-item danger"
@@ -132,17 +124,25 @@ import { ChatItem } from '../../mock/mock-data';
                 >
                   Block
                 </button>
-                <button
-                  type="button"
-                  class="menu-item"
-                  (click)="handleAction('clear')"
-                  role="menuitem"
-                >
-                  Clear chat
-                </button>
               }
-            </div>
-          }
+              <button
+                type="button"
+                class="menu-item"
+                (click)="handleAction('clear')"
+                role="menuitem"
+              >
+                Clear chat
+              </button>
+              <button
+                type="button"
+                class="menu-item danger"
+                (click)="handleAction('delete')"
+                role="menuitem"
+              >
+                Delete chat
+              </button>
+            }
+          </div>
         }
       </div>
     </div>
@@ -179,18 +179,6 @@ import { ChatItem } from '../../mock/mock-data';
       gap: 12px;
       flex: 1;
       min-width: 0;
-      transition: opacity 0.2s ease;
-    }
-
-    /* Faded rows rule: Only row-content is faded. Kebab and context menu stay at 100% opacity! */
-    .chat-row.faded {
-      cursor: default;
-      &:hover {
-        background-color: transparent;
-      }
-      .row-content {
-        opacity: 0.55;
-      }
     }
 
     .info {
@@ -376,14 +364,7 @@ export class ChatRowComponent {
 
   readonly menuOpen = signal<boolean>(false);
 
-  isFaded(): boolean {
-    return !!(this.chat().isDeclined || this.chat().isBlocked);
-  }
-
   onRowClick(event: Event): void {
-    if (this.isFaded()) {
-      return;
-    }
     this.rowClicked.emit(this.chat());
   }
 

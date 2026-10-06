@@ -264,23 +264,28 @@ Starts a conversation or sends initial message.
 ```
 - **Rules**:
   - If self: returns Notes to Self conversation.
-  - If blocked: 403 Forbidden.
-  - If pending and requester sent 1 message: 403 Forbidden (`MAX_PENDING_MESSAGES_REACHED`).
+  - If blocked: 403 Forbidden (`USER_BLOCKED`).
+  - No attachments allowed on requests: 403 Forbidden (`ATTACHMENTS_NOT_ALLOWED`).
+  - If pending and requester already sent 1 message: 403 Forbidden (`REQUEST_PENDING_LIMIT`).
+  - If 1st decline: requester gets 1 extra message (`canSendExtraMessage: true`).
+  - If 2nd decline or extra message already sent: 403 Forbidden (`REQUEST_DECLINED`).
 
 ### `GET /:id`
-Gets conversation details and members.
+Gets conversation details, status, member roles, `declineCount`, `declinedAt`, and `canSendExtraMessage`. Masked silently if recipient blocked while pending.
 
 ### `POST /:id/accept`
-Accepts a pending conversation request.
+Accepts a pending or declined conversation request. Emits `request:accepted` and `conversation:updated`.
 
 ### `POST /:id/decline`
-Declines a pending conversation request.
+Declines a pending conversation request. Increments `declineCount` and records `declinedAt`. Emits `request:declined` and `conversation:updated`.
 
 ### `POST /:id/block`
 Blocks the other user in the conversation.
+- If blocked while pending: SILENT block (target user receives no events, views normal `pending_sent` state, subsequent messages return 403 `REQUEST_PENDING_LIMIT`).
+- If blocked after accepted: emits neutral `conversation:updated`, messaging blocked with 403 `USER_BLOCKED`.
 
 ### `POST /:id/unblock`
-Unblocks the other user.
+Unblocks the other user. Resets conversation to `pending` with `wasAccepted: false` and emits `request:new` and `conversation:updated`.
 
 ### `POST /:id/clear`
 Clears chat history for current user (sets `clearedAt`).
@@ -358,5 +363,8 @@ const socket = io('http://localhost:3000', {
 | `typing:update` | `{ "conversationId": "uuid", "userId": "uuid", "isTyping": true/false }` | Typing indicator for conversation |
 | `message:new` | `{ "conversationId": "uuid", "message": { ... } }` | Delivered in real-time when new message is sent |
 | `message:seen` | `{ "conversationId": "uuid", "seenBy": "uuid", "seenAt": "iso" }` | Delivered when recipient opens conversation |
+| `request:new` | `{ "conversationId": "uuid" }` | Delivered to recipient when a new chat request is received |
+| `request:accepted` | `{ "conversationId": "uuid" }` | Delivered when a pending request is accepted |
+| `request:declined` | `{ "conversationId": "uuid", "declineCount": number }` | Delivered when a chat request is declined |
 | `conversation:updated`| `{ "conversationId": "uuid", ... }` | Delivered on accept, decline, block, etc. |
 | `user:updated` | `{ "id": "uuid", "name": "string", "avatarUrl": "string|null", "bio": "string|null", "statusMessage": "string|null" }` | Delivered to conversation partners when a user updates profile or avatar |
