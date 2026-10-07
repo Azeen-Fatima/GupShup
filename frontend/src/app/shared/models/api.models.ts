@@ -28,6 +28,8 @@ export interface User {
   bio?: string | null;
   statusMessage?: string | null;
   themePreference?: 'system' | 'light' | 'dark' | 'auto';
+  hasPassword?: boolean;
+  authProvider?: 'local' | 'google';
   createdAt?: string;
   updatedAt?: string;
 }
@@ -69,8 +71,10 @@ export interface ConversationItem {
     type: string;
     senderId: string;
     createdAt: string;
+    deliveredAt?: string | null;
     seenAt: string | null;
     attachmentUrl: string | null;
+    clientId?: string | null;
   } | null;
   unreadCount: number;
 }
@@ -93,6 +97,7 @@ export interface Message {
   attachmentName?: string | null;
   attachmentSize?: string | null;
   attachmentMime?: string | null;
+  clientId?: string | null;
   createdAt: string;
   deliveredAt?: string | null;
   seenAt?: string | null;
@@ -177,9 +182,9 @@ export function formatConversationToChatItem(
     ? formatTime(conv.lastMessage.createdAt)
     : formatTime(conv.createdAt);
 
-  let status: 'sent' | 'seen' | 'pending' | undefined;
+  let status: 'sent' | 'delivered' | 'seen' | 'pending' | undefined;
   if (conv.lastMessage && conv.lastMessage.senderId === currentUserId) {
-    status = conv.lastMessage.seenAt ? 'seen' : 'sent';
+    status = conv.lastMessage.seenAt ? 'seen' : (conv.lastMessage.deliveredAt ? 'delivered' : 'sent');
   }
 
   const isPendingRequest = conv.state === 'pending_sent';
@@ -225,14 +230,20 @@ export function formatMessageToChatMessage(
     minute: '2-digit',
   });
 
+  let status: 'sent' | 'delivered' | 'seen' | 'pending' | undefined;
+  if (isMe) {
+    status = msg.seenAt ? 'seen' : (msg.deliveredAt ? 'delivered' : 'sent');
+  }
+
   return {
     id: msg.id,
+    clientId: msg.clientId || undefined,
     chatId: msg.conversationId,
     text: msg.body || '',
     sender: (isMe ? 'me' : 'them') as 'me' | 'them',
     timestamp: msg.createdAt,
     timeString,
-    status: (isMe ? (msg.seenAt ? 'seen' : 'sent') : undefined) as 'sent' | 'seen' | undefined,
+    status,
     attachment: msg.attachmentUrl
       ? {
           type: (msg.type as any) || 'image',

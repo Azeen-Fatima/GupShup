@@ -52,9 +52,10 @@ export class ConversationsService {
   createConversation(
     recipientId: string,
     message: string,
-    attachment?: any
+    attachment?: any,
+    clientId?: string
   ): Observable<{ conversationId: string; message: Message }> {
-    const payload: any = { recipientId };
+    const payload: any = { recipientId, clientId };
     if (attachment) {
       payload.initialMessage = {
         type: attachment.type || 'text',
@@ -63,6 +64,7 @@ export class ConversationsService {
         attachmentName: attachment.name,
         attachmentSize: attachment.size,
         attachmentMime: attachment.mime,
+        clientId,
       };
     } else {
       payload.message = message;
@@ -181,18 +183,28 @@ export class ConversationsService {
   }
 
   /**
-   * Real-time update: User presence
+   * Real-time update: User presence (only shown if conversation is accepted or self)
    */
   updatePresence(userId: string, isOnline: boolean, lastSeen?: string): void {
     this.conversations.update((list) =>
       list.map((c) => {
         if (!c.isSelf && c.otherUser.id === userId) {
+          if (c.status !== 'accepted') {
+            return {
+              ...c,
+              otherUser: {
+                ...c.otherUser,
+                isOnline: false,
+                lastSeen: null,
+              },
+            };
+          }
           return {
             ...c,
             otherUser: {
               ...c.otherUser,
               isOnline,
-              ...(lastSeen ? { lastSeen } : {}),
+              ...(lastSeen !== undefined ? { lastSeen } : {}),
             },
           };
         }
@@ -218,8 +230,10 @@ export class ConversationsService {
           type: message.type,
           senderId: message.senderId,
           createdAt: message.createdAt,
+          deliveredAt: message.deliveredAt || null,
           seenAt: message.seenAt || null,
           attachmentUrl: message.attachmentUrl,
+          clientId: message.clientId || null,
         },
         lastMessageAt: message.createdAt,
         unreadCount: isCurrentActive ? 0 : existing.unreadCount + 1,
@@ -238,6 +252,33 @@ export class ConversationsService {
   }
 
   /**
+   * Real-time update: Message marked delivered
+   */
+  handleMessageDelivered(data: {
+    conversationId: string;
+    messageId?: string;
+    clientId?: string;
+    deliveredAt: string;
+  }): void {
+    this.conversations.update((list) =>
+      list.map((c) => {
+        if (c.id === data.conversationId && c.lastMessage) {
+          if (!c.lastMessage.seenAt) {
+            return {
+              ...c,
+              lastMessage: {
+                ...c.lastMessage,
+                deliveredAt: data.deliveredAt,
+              },
+            };
+          }
+        }
+        return c;
+      })
+    );
+  }
+
+  /**
    * Real-time update: Messages marked seen
    */
   handleMessagesSeen(conversationId: string, seenAt: string): void {
@@ -249,6 +290,7 @@ export class ConversationsService {
             lastMessage: {
               ...c.lastMessage,
               seenAt,
+              deliveredAt: c.lastMessage.deliveredAt || seenAt,
             },
           };
         }

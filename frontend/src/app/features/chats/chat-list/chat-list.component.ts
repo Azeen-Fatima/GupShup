@@ -599,8 +599,14 @@ export class ChatListComponent implements OnInit {
     );
   });
 
-  // Search users in sheet
-  readonly filteredPeople = computed(() => this.sheetUsers());
+  // Search users in sheet (excludes existing conversation partners)
+  readonly filteredPeople = computed(() => {
+    const list = this.sheetUsers();
+    const existingPartnerIds = new Set(
+      this.conversationsService.conversations().map((c) => c.otherUser.id)
+    );
+    return list.filter((u) => !existingPartnerIds.has(u.id));
+  });
 
   // Modal dialog state
   readonly modalState = signal<{
@@ -680,6 +686,7 @@ export class ChatListComponent implements OnInit {
   }
 
   messagePerson(person: SearchUserResult): void {
+    this.sheetUsers.update((list) => list.filter((u) => u.id !== person.id));
     this.sheetOpen.set(false);
     this.usersService.setDraftUser(person);
     if (person.conversationId) {

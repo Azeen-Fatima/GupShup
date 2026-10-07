@@ -81,12 +81,16 @@ import { ChatMessage } from '../../mock/mock-data';
               <span>Failed · Tap to retry</span>
             </button>
           } @else if (message().status && !isPending()) {
-            @if (message().status === 'seen') {
-              <span class="tick-icon seen" aria-label="Seen">
+            @if (message().status === 'seen' || message().status === 'read') {
+              <span class="tick-icon read" aria-label="Read">
+                <app-svg-icon name="check2" [size]="15"></app-svg-icon>
+              </span>
+            } @else if (message().status === 'delivered') {
+              <span class="tick-icon delivered" aria-label="Delivered">
                 <app-svg-icon name="check2" [size]="15"></app-svg-icon>
               </span>
             } @else if (message().status === 'sent') {
-              <span class="tick-icon" aria-label="Sent">
+              <span class="tick-icon sent" aria-label="Sent">
                 <app-svg-icon name="check" [size]="15"></app-svg-icon>
               </span>
             }
@@ -139,8 +143,9 @@ import { ChatMessage } from '../../mock/mock-data';
       &.me {
         align-items: flex-end;
         .bubble {
-          background-color: var(--amber);
-          color: var(--on-amber); /* #2E2A26 - always dark charcoal, never white */
+          background-color: var(--bubble-sent, #FEF7EC);
+          color: var(--bubble-sent-text, var(--ink));
+          border: 1px solid var(--bubble-sent-border, rgba(232, 162, 61, 0.45));
           border-bottom-right-radius: 4px;
         }
         .meta-row {
@@ -265,8 +270,14 @@ import { ChatMessage } from '../../mock/mock-data';
       align-items: center;
       color: var(--muted);
 
-      &.seen {
-        color: var(--teal);
+      &.seen,
+      &.read {
+        color: #2563EB;
+      }
+
+      &.delivered,
+      &.sent {
+        color: var(--muted);
       }
 
       &.sending {

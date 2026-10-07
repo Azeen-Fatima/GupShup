@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
+import { prisma } from '../../db/prisma';
 import { usersService } from './users.service';
 import { uploadsService } from '../uploads/uploads.service';
 import { sendSuccess } from '../../utils/response';
@@ -85,8 +86,28 @@ export class UsersController {
     try {
       const targetUserId = String(req.params.id);
       const user = await usersService.getProfile(targetUserId);
-      const isOnline = await presenceService.isOnline(targetUserId);
-      const lastSeen = await presenceService.getLastSeen(targetUserId);
+
+      let isOnline = false;
+      let lastSeen: string | null = null;
+
+      if (req.user?.userId === targetUserId) {
+        isOnline = true;
+      } else if (req.user?.userId) {
+        const acceptedConv = await prisma.conversation.findFirst({
+          where: {
+            status: 'accepted',
+            OR: [
+              { userAId: req.user.userId, userBId: targetUserId },
+              { userAId: targetUserId, userBId: req.user.userId },
+            ],
+          },
+        });
+        if (acceptedConv) {
+          isOnline = await presenceService.isOnline(targetUserId);
+          lastSeen = await presenceService.getLastSeen(targetUserId);
+        }
+      }
+
       sendSuccess(res, {
         user: {
           id: user.id,

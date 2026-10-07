@@ -111,8 +111,8 @@ export class AvatarComponent {
   readonly name = input<string>('');
   readonly initials = input<string>('');
   readonly size = input<AvatarSize>('md');
-  readonly showOnlineDot = input<boolean>(false);
-  readonly isOnline = input<boolean>(false); // Compatibility alias
+  readonly showOnlineDot = input<boolean | undefined>(false);
+  readonly isOnline = input<boolean | undefined>(false); // Compatibility alias
 
   readonly imgFailed = signal<boolean>(false);
 
@@ -126,7 +126,7 @@ export class AvatarComponent {
   }
 
   protected readonly hasOnlineDot = computed(() => {
-    return this.showOnlineDot() || this.isOnline();
+    return Boolean(this.showOnlineDot() || this.isOnline());
   });
 
   protected readonly resolvedAvatarUrl = computed(() => {

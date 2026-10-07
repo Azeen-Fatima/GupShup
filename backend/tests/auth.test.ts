@@ -229,4 +229,38 @@ describe('Auth Module Integration Tests', () => {
     expect(res.body.error.code).toBe('GOOGLE_ACCOUNT_ONLY');
     expect(res.body.error.message).toBe('This account uses Google sign-in. Please use Continue with Google.');
   });
+
+  it('10. Rejects change-password and change-email for Google-only accounts', async () => {
+    const googleUser = await prisma.user.create({
+      data: {
+        email: `google_change_${Date.now()}@example.com`,
+        username: `guser_${Date.now().toString().slice(-5)}`,
+        name: 'Google Test User',
+        googleId: `gid_${Date.now()}`,
+        passwordHash: null,
+      },
+    });
+
+    const googleToken = (await import('../src/utils/token')).generateAccessToken({
+      userId: googleUser.id,
+      email: googleUser.email,
+      username: googleUser.username,
+    });
+
+    const passRes = await request(app)
+      .post('/api/v1/auth/change-password')
+      .set('Authorization', `Bearer ${googleToken}`)
+      .send({ currentPassword: 'OldPassword123!', newPassword: 'NewPassword123!' });
+
+    expect(passRes.status).toBe(400);
+    expect(passRes.body.error.code).toBe('NO_LOCAL_PASSWORD');
+
+    const emailRes = await request(app)
+      .post('/api/v1/auth/change-email/code')
+      .set('Authorization', `Bearer ${googleToken}`)
+      .send({ newEmail: 'newemail@example.com' });
+
+    expect(emailRes.status).toBe(400);
+    expect(emailRes.body.error.code).toBe('GOOGLE_ACCOUNT_EMAIL_IMMUTABLE');
+  });
 });

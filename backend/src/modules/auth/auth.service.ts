@@ -27,6 +27,16 @@ import {
 
 const BCRYPT_SALT_ROUNDS = 12;
 
+export interface AuthUserResponse {
+  id: string;
+  email: string;
+  username: string;
+  name: string;
+  avatarUrl: string | null;
+  hasPassword?: boolean;
+  authProvider?: 'local' | 'google';
+}
+
 let googleClient: OAuth2Client | null = null;
 function getGoogleClient(): OAuth2Client | null {
   if (googleClient) return googleClient;
@@ -101,7 +111,7 @@ export class AuthService {
     username: string;
     password: string;
   }): Promise<{
-    user: { id: string; email: string; username: string; name: string; avatarUrl: string | null };
+    user: AuthUserResponse;
     accessToken: string;
     refreshToken: string;
   }> {
@@ -166,6 +176,8 @@ export class AuthService {
         username: user.username,
         name: user.name,
         avatarUrl: user.avatarUrl,
+        hasPassword: Boolean(user.passwordHash),
+        authProvider: (user.googleId ? 'google' : 'local') as 'google' | 'local',
       },
       accessToken,
       refreshToken,
@@ -176,7 +188,7 @@ export class AuthService {
    * Login with email or username
    */
   async login(identifier: string, password: string): Promise<{
-    user: { id: string; email: string; username: string; name: string; avatarUrl: string | null };
+    user: AuthUserResponse;
     accessToken: string;
     refreshToken: string;
   }> {
@@ -210,6 +222,8 @@ export class AuthService {
         username: user.username,
         name: user.name,
         avatarUrl: user.avatarUrl,
+        hasPassword: Boolean(user.passwordHash),
+        authProvider: (user.googleId ? 'google' : 'local') as 'google' | 'local',
       },
       accessToken,
       refreshToken,
@@ -376,6 +390,18 @@ export class AuthService {
    * Change email: request verification code for new email
    */
   async requestChangeEmailCode(userId: string, newEmail: string): Promise<{ message: string; cooldownSeconds?: number }> {
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+    });
+
+    if (!user) {
+      throw new NotFoundError('User account not found', 'USER_NOT_FOUND');
+    }
+
+    if (user.googleId) {
+      throw new BadRequestError('Email address cannot be changed for accounts linked with Google.', 'GOOGLE_ACCOUNT_EMAIL_IMMUTABLE');
+    }
+
     const normalizedNewEmail = newEmail.toLowerCase().trim();
 
     const existingUser = await prisma.user.findUnique({
@@ -429,7 +455,7 @@ export class AuthService {
     email?: string;
     name?: string;
     avatarUrl?: string | null;
-    user?: { id: string; email: string; username: string; name: string; avatarUrl: string | null };
+    user?: AuthUserResponse;
     accessToken?: string;
     refreshToken?: string;
   }> {
@@ -487,6 +513,8 @@ export class AuthService {
           username: user.username,
           name: user.name,
           avatarUrl: user.avatarUrl,
+          hasPassword: Boolean(user.passwordHash),
+          authProvider: 'google',
         },
         accessToken: tokens.accessToken,
         refreshToken: tokens.refreshToken,
@@ -521,7 +549,7 @@ export class AuthService {
     avatarUrl?: string | null;
     password?: string;
   }): Promise<{
-    user: { id: string; email: string; username: string; name: string; avatarUrl: string | null };
+    user: AuthUserResponse;
     accessToken: string;
     refreshToken: string;
   }> {
@@ -579,6 +607,8 @@ export class AuthService {
         username: user.username,
         name: user.name,
         avatarUrl: user.avatarUrl,
+        hasPassword: Boolean(user.passwordHash),
+        authProvider: 'google',
       },
       accessToken: tokens.accessToken,
       refreshToken: tokens.refreshToken,

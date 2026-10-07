@@ -26,6 +26,8 @@ describe('Users Module Integration Tests', () => {
     expect(res.body.success).toBe(true);
     expect(res.body.data.user.id).toBe(user1.user.id);
     expect(res.body.data.user.email).toBe(user1.user.email);
+    expect(res.body.data.user.hasPassword).toBe(true);
+    expect(res.body.data.user.authProvider).toBe('local');
   });
 
   it('2. PATCH /api/v1/users/me updates profile fields', async () => {
@@ -46,16 +48,38 @@ describe('Users Module Integration Tests', () => {
     expect(res.body.data.user.themePreference).toBe('dark');
   });
 
-  it('3. GET /api/v1/users/search returns matches with relationship status', async () => {
-    const res = await request(app)
-      .get(`/api/v1/users/search?q=${user2.user.username}`)
+  it('3. GET /api/v1/users/search returns matches with relationship status and excludes existing conversations', async () => {
+    const user3 = await createTestUser('test_search3');
+
+    // Before conversation: user3 is found
+    const resBefore = await request(app)
+      .get(`/api/v1/users/search?q=${user3.user.username}`)
       .set('Authorization', user1.authHeader);
 
-    expect(res.status).toBe(200);
-    expect(res.body.data.users).toBeInstanceOf(Array);
-    const match = res.body.data.users.find((u: any) => u.id === user2.user.id);
-    expect(match).toBeDefined();
-    expect(match.relationshipStatus).toBe('none');
+    expect(resBefore.status).toBe(200);
+    const matchBefore = resBefore.body.data.users.find((u: any) => u.id === user3.user.id);
+    expect(matchBefore).toBeDefined();
+
+    // Create a pending conversation between user1 and user3
+    await request(app)
+      .post('/api/v1/conversations')
+      .set('Authorization', user1.authHeader)
+      .send({ recipientId: user3.user.id, message: 'Hello user3' });
+
+    // After conversation: user3 is excluded in BOTH directions
+    const resAfter1 = await request(app)
+      .get(`/api/v1/users/search?q=${user3.user.username}`)
+      .set('Authorization', user1.authHeader);
+    expect(resAfter1.status).toBe(200);
+    const matchAfter1 = resAfter1.body.data.users.find((u: any) => u.id === user3.user.id);
+    expect(matchAfter1).toBeUndefined();
+
+    const resAfter2 = await request(app)
+      .get(`/api/v1/users/search?q=${user1.user.username}`)
+      .set('Authorization', user3.authHeader);
+    expect(resAfter2.status).toBe(200);
+    const matchAfter2 = resAfter2.body.data.users.find((u: any) => u.id === user1.user.id);
+    expect(matchAfter2).toBeUndefined();
   });
 
   it('4. DELETE /api/v1/users/me/avatar clears avatar', async () => {
@@ -102,16 +126,16 @@ describe('Users Module Integration Tests', () => {
     expect(res.body.error.message).toContain('File must be smaller than 5 MB');
   });
 
-  it('8. GET /api/v1/users/:id returns user profile with presence', async () => {
-    const res = await request(app)
+  it('8. GET /api/v1/users/:id suppresses presence unless conversation is accepted', async () => {
+    // user1 and user2 have NO accepted conversation -> presence suppressed
+    const resSuppressed = await request(app)
       .get(`/api/v1/users/${user2.user.id}`)
       .set('Authorization', user1.authHeader);
 
-    expect(res.status).toBe(200);
-    expect(res.body.success).toBe(true);
-    expect(res.body.data.user.id).toBe(user2.user.id);
-    expect(res.body.data.user.username).toBe(user2.user.username);
-    expect(res.body.data.user).toHaveProperty('isOnline');
-    expect(res.body.data.user).toHaveProperty('lastSeen');
+    expect(resSuppressed.status).toBe(200);
+    expect(resSuppressed.body.success).toBe(true);
+    expect(resSuppressed.body.data.user.id).toBe(user2.user.id);
+    expect(resSuppressed.body.data.user.isOnline).toBe(false);
+    expect(resSuppressed.body.data.user.lastSeen).toBeNull();
   });
 });

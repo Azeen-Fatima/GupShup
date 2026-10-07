@@ -92,4 +92,54 @@ describe('Messages Module Integration Tests', () => {
     const chat = resConv.body.data.conversations.find((c: any) => c.id === convId);
     expect(chat?.unreadCount).toBe(0);
   });
+
+  it('4. POST /api/v1/conversations/:id/messages dedupes by clientId', async () => {
+    const clientId = `client_msg_${Date.now()}`;
+
+    const res1 = await request(app)
+      .post(`/api/v1/conversations/${convId}/messages`)
+      .set('Authorization', user1.authHeader)
+      .send({ body: 'Message with clientId', clientId });
+
+    expect(res1.status).toBe(201);
+    const msgId = res1.body.data.message.id;
+    expect(res1.body.data.message.clientId).toBe(clientId);
+
+    // Resend with exact same clientId
+    const res2 = await request(app)
+      .post(`/api/v1/conversations/${convId}/messages`)
+      .set('Authorization', user1.authHeader)
+      .send({ body: 'Message with clientId duplicate attempt', clientId });
+
+    expect(res2.status).toBe(201);
+    expect(res2.body.data.message.id).toBe(msgId);
+    expect(res2.body.data.message.body).toBe('Message with clientId');
+  });
+
+  it('5. Verifies 3-stage message ticks: sent -> delivered -> read', async () => {
+    const resSend = await request(app)
+      .post(`/api/v1/conversations/${convId}/messages`)
+      .set('Authorization', user1.authHeader)
+      .send({ body: 'Tick verification message' });
+
+    expect(resSend.status).toBe(201);
+    const msg = resSend.body.data.message;
+    // Stage 1: Sent (1 grey tick)
+    expect(msg.seenAt).toBeNull();
+    expect(msg.deliveredAt).toBeNull();
+
+    // Recipient marks seen -> Stage 2 & 3: Delivered + Read (2 blue ticks)
+    await request(app)
+      .post(`/api/v1/conversations/${convId}/seen`)
+      .set('Authorization', user2.authHeader);
+
+    const resMsgs = await request(app)
+      .get(`/api/v1/conversations/${convId}/messages`)
+      .set('Authorization', user1.authHeader);
+
+    const updatedMsg = resMsgs.body.data.messages.find((m: any) => m.id === msg.id);
+    expect(updatedMsg).toBeDefined();
+    expect(updatedMsg.seenAt).not.toBeNull();
+    expect(updatedMsg.deliveredAt).not.toBeNull();
+  });
 });

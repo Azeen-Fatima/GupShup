@@ -102,7 +102,9 @@ Completes account registration, creates initial "Notes to Self" conversation, an
     "email": "user@example.com",
     "username": "john_doe",
     "name": "John Doe",
-    "avatarUrl": null
+    "avatarUrl": null,
+    "hasPassword": true,
+    "authProvider": "local"
   },
   "accessToken": "jwt..."
 }
@@ -111,7 +113,7 @@ Completes account registration, creates initial "Notes to Self" conversation, an
 ### `POST /login`
 Logs in with email or username + password.
 - **Body**: `{ "identifier": "john_doe", "password": "Password123!" }`
-- **Response**: Sets `refreshToken` httpOnly cookie. Returns `user` and `accessToken`.
+- **Response**: Sets `refreshToken` httpOnly cookie. Returns `user` (with `hasPassword` and `authProvider`) and `accessToken`.
 - **Note**: For Google-only accounts (no password set), returns `401 Unauthorized` with code `GOOGLE_ACCOUNT_ONLY` and message `"This account uses Google sign-in. Please use Continue with Google."`.
 
 ### `POST /refresh`
@@ -140,11 +142,13 @@ Resets password and revokes all existing refresh tokens.
 Updates password for authenticated user.
 - **Auth**: `Bearer <accessToken>`
 - **Body**: `{ "currentPassword": "OldPassword123!", "newPassword": "NewPassword123!" }`
+- **Note**: Rejects with `400 Bad Request` (`NO_LOCAL_PASSWORD`) if user signed up via Google and has no local password.
 
 ### `POST /change-email/code`
 Sends verification OTP to new email address.
 - **Auth**: `Bearer <accessToken>`
 - **Body**: `{ "newEmail": "new@example.com" }`
+- **Note**: Rejects with `400 Bad Request` (`GOOGLE_ACCOUNT_EMAIL_IMMUTABLE`) if account is linked with Google.
 
 ### `POST /change-email/confirm`
 Confirms verification OTP and updates user's email.
@@ -204,6 +208,7 @@ Removes user avatar.
 
 ### `GET /search?q=query`
 Searches users by username or name.
+- Excludes current user, blocked users, and any user who already has ANY conversation (pending, accepted, declined, or blocked) in both directions.
 - **Response**: Array of users with relative relationship status:
   - `relationshipStatus`: `'none' | 'pending_sent' | 'pending_received' | 'accepted' | 'declined' | 'blocked_by_me' | 'blocked_by_them'`
 
@@ -220,6 +225,7 @@ Lists users blocked by the current user.
 
 ### `GET /`
 Fetches conversation list for current user.
+- **Presence Privacy**: Returns `isOnline: false, lastSeen: null` unless conversation is accepted or Notes to Self.
 - **Response**:
 ```json
 {
@@ -236,14 +242,17 @@ Fetches conversation list for current user.
         "username": "alice",
         "name": "Alice Smith",
         "avatarUrl": null,
-        "isOnline": true
+        "isOnline": true,
+        "lastSeen": "2026-10-07T10:00:00.000Z"
       },
       "lastMessage": {
         "id": "uuid",
+        "clientId": "client-uuid",
         "body": "Hey there!",
         "type": "text",
         "senderId": "uuid",
         "createdAt": "2026-10-03T19:00:00.000Z",
+        "deliveredAt": "2026-10-03T19:00:01.000Z",
         "seenAt": null
       },
       "unreadCount": 2,
@@ -259,7 +268,8 @@ Starts a conversation or sends initial message.
 ```json
 {
   "recipientId": "uuid",
-  "message": "Hello!"
+  "message": "Hello!",
+  "clientId": "client-uuid"
 }
 ```
 - **Rules**:
@@ -272,17 +282,19 @@ Starts a conversation or sends initial message.
 
 ### `GET /:id`
 Gets conversation details, status, member roles, `declineCount`, `declinedAt`, and `canSendExtraMessage`. Masked silently if recipient blocked while pending.
+- **Presence Privacy**: Censors other user presence (`isOnline: false, lastSeen: null`) unless conversation is accepted or Notes to Self.
 
 ### `POST /:id/accept`
-Accepts a pending or declined conversation request. Emits `request:accepted` and `conversation:updated`.
+Accepts a pending or declined conversation request. Emits `request:accepted`, `conversation:updated`, and mutual `presence:update`.
 
 ### `POST /:id/decline`
-Declines a pending conversation request. Increments `declineCount` and records `declinedAt`. Emits `request:declined` and `conversation:updated`.
+Declines a pending conversation request. Increments `declineCount` and records `declinedAt`. Emits `request:declined`, `conversation:updated`, and sets `presence:update` to offline for both parties.
 
 ### `POST /:id/block`
 Blocks the other user in the conversation.
 - If blocked while pending: SILENT block (target user receives no events, views normal `pending_sent` state, subsequent messages return 403 `REQUEST_PENDING_LIMIT`).
 - If blocked after accepted: emits neutral `conversation:updated`, messaging blocked with 403 `USER_BLOCKED`.
+- Suppresses presence in both directions (`presence:update` offline).
 
 ### `POST /:id/unblock`
 Unblocks the other user. Resets conversation to `pending` with `wasAccepted: false` and emits `request:new` and `conversation:updated`.
@@ -317,14 +329,16 @@ Sends a message in the conversation.
 {
   "type": "text",
   "body": "Hi there!",
-  "attachmentUrl": null
+  "attachmentUrl": null,
+  "clientId": "client-uuid"
 }
 ```
+- **Deduplication**: If a message with matching `(conversationId, senderId, clientId)` exists, returns the existing message without duplicate creation.
 - Emits real-time Socket.io event `message:new`.
 
 ### `POST /:id/seen`
-Marks all unseen messages in conversation as seen.
-- Emits real-time Socket.io event `message:seen`.
+Marks all unseen messages in conversation as delivered and seen.
+- Emits real-time Socket.io events `message:read` and `message:seen` to partner.
 
 ---
 
@@ -342,10 +356,14 @@ Uploads chat attachment image (max 5MB).
 ## 7. Real-Time Socket.io Events
 
 ### Connection & Auth
-Pass JWT token via auth handshake or Authorization header:
+Pass JWT token via auth handshake or Authorization header. Fallback transports `['polling', 'websocket']`:
 ```javascript
 const socket = io('http://localhost:3000', {
-  auth: { token: accessToken }
+  auth: { token: accessToken },
+  transports: ['polling', 'websocket'],
+  reconnectionAttempts: 10,
+  reconnectionDelay: 1000,
+  reconnectionDelayMax: 5000
 });
 ```
 
@@ -353,16 +371,20 @@ const socket = io('http://localhost:3000', {
 | Event | Payload | Description |
 |---|---|---|
 | `presence:heartbeat` | None | Refreshes user online TTL (every 25s) |
-| `typing:start` | `{ "conversationId": "uuid" }` | Sets typing status (4s TTL) and notifies other member |
+| `message:delivered` | `{ "messageId"?: string, "conversationId"?: string, "clientId"?: string }` | Acknowledges message receipt by recipient |
+| `message:read` | `{ "conversationId": "uuid" }` | Acknowledges message read by recipient |
+| `typing:start` | `{ "conversationId": "uuid" }` | Sets typing status (accepted chats only) |
 | `typing:stop` | `{ "conversationId": "uuid" }` | Clears typing status |
 
 ### Server -> Client Events
 | Event | Payload | Description |
 |---|---|---|
-| `presence:update` | `{ "userId": "uuid", "isOnline": true/false, "lastSeen": "iso" }` | Broadcasted on user connect / disconnect |
-| `typing:update` | `{ "conversationId": "uuid", "userId": "uuid", "isTyping": true/false }` | Typing indicator for conversation |
+| `presence:update` | `{ "userId": "uuid", "isOnline": true/false, "lastSeen": "iso" }` | Broadcasted ONLY to accepted conversation partners |
+| `typing:update` | `{ "conversationId": "uuid", "userId": "uuid", "isTyping": true/false }` | Typing indicator (accepted chats only) |
 | `message:new` | `{ "conversationId": "uuid", "message": { ... } }` | Delivered in real-time when new message is sent |
-| `message:seen` | `{ "conversationId": "uuid", "seenBy": "uuid", "seenAt": "iso" }` | Delivered when recipient opens conversation |
+| `message:delivered` | `{ "messageId": "uuid", "clientId": "uuid|null", "conversationId": "uuid", "deliveredAt": "iso" }` | Emitted to sender when recipient app receives message (2 grey ticks) |
+| `message:read` | `{ "conversationId": "uuid", "seenBy": "uuid", "seenAt": "iso", "readAt": "iso" }` | Emitted when recipient has chat open and visible (2 blue ticks) |
+| `message:seen` | `{ "conversationId": "uuid", "seenBy": "uuid", "seenAt": "iso" }` | Backwards compatibility for message read |
 | `request:new` | `{ "conversationId": "uuid" }` | Delivered to recipient when a new chat request is received |
 | `request:accepted` | `{ "conversationId": "uuid" }` | Delivered when a pending request is accepted |
 | `request:declined` | `{ "conversationId": "uuid", "declineCount": number }` | Delivered when a chat request is declined |

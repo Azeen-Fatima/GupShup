@@ -109,16 +109,27 @@ import { EmptyStateComponent } from '../../../shared/components/empty-state/empt
 
           <div class="field-item">
             <label for="profEmail" class="field-label">Email</label>
-            <input
-              id="profEmail"
-              type="email"
-              formControlName="email"
-              class="form-input"
-              [class.invalid]="isInvalid('email')"
-            />
-            <p class="field-hint">Changing email will ask for a new verification code</p>
-            @if (isInvalid('email')) {
-              <span class="field-error">Please enter a valid email</span>
+            @if (isGoogleUser()) {
+              <input
+                id="profEmail"
+                type="email"
+                [value]="currentUser()?.email || ''"
+                class="form-input"
+                readonly
+              />
+              <p class="field-hint">Linked with your Google account</p>
+            } @else {
+              <input
+                id="profEmail"
+                type="email"
+                formControlName="email"
+                class="form-input"
+                [class.invalid]="isInvalid('email')"
+              />
+              <p class="field-hint">Changing email will ask for a new verification code</p>
+              @if (isInvalid('email')) {
+                <span class="field-error">Please enter a valid email</span>
+              }
             }
           </div>
 
@@ -142,16 +153,18 @@ import { EmptyStateComponent } from '../../../shared/components/empty-state/empt
             </app-button>
           </div>
 
-          <div style="margin-top: 14px;">
-            <app-button
-              type="button"
-              variant="ghost"
-              [fullWidth]="true"
-              (clicked)="openPasswordModal()"
-            >
-              Change password
-            </app-button>
-          </div>
+          @if (hasPassword()) {
+            <div style="margin-top: 14px;">
+              <app-button
+                type="button"
+                variant="ghost"
+                [fullWidth]="true"
+                (clicked)="openPasswordModal()"
+              >
+                Change password
+              </app-button>
+            </div>
+          }
         </form>
 
         <!-- Requests You Declined Accordion (Instant apply) -->
@@ -762,6 +775,8 @@ export class SettingsComponent implements OnInit {
   @ViewChildren('emailOtpInput') emailOtpInputs!: QueryList<ElementRef<HTMLInputElement>>;
 
   readonly currentUser = this.authService.currentUser;
+  readonly hasPassword = computed(() => this.currentUser()?.hasPassword ?? true);
+  readonly isGoogleUser = computed(() => this.currentUser()?.authProvider === 'google' || !this.hasPassword());
   readonly currentUserDisplay = computed(() => {
     const u = this.currentUser();
     return {
@@ -920,6 +935,11 @@ export class SettingsComponent implements OnInit {
 
   onSaveClicked(): void {
     if (this.isSaveDisabled()) return;
+
+    if (this.isGoogleUser()) {
+      this.applyProfileSave();
+      return;
+    }
 
     const currentEmail = this.currentUser()?.email;
     const newEmail = this.profileForm.get('email')?.value?.trim();
@@ -1097,6 +1117,7 @@ export class SettingsComponent implements OnInit {
   }
 
   openPasswordModal(): void {
+    if (!this.hasPassword()) return;
     this.passwordForm.reset();
     this.passwordModalOpen.set(true);
   }

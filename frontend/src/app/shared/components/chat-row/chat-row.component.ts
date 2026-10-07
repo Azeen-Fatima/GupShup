@@ -32,7 +32,7 @@ import { ChatItem } from '../../mock/mock-data';
           [name]="chat().name"
           [initials]="chat().initials"
           [size]="'lg'"
-          [showOnlineDot]="chat().isOnline"
+          [showOnlineDot]="((chat().rawStatus === 'accepted' || chat().isSelfNotes) && chat().isOnline) ? true : false"
         ></app-avatar>
 
         <div class="info">
@@ -49,12 +49,16 @@ import { ChatItem } from '../../mock/mock-data';
 
           <div class="bot-line">
             <span class="last-msg">
-              @if (chat().status === 'seen') {
-                <span class="status-tick seen" aria-label="Seen">
+              @if (chat().status === 'seen' || chat().status === 'read') {
+                <span class="status-tick read" aria-label="Read">
+                  <app-svg-icon name="check2" [size]="15"></app-svg-icon>
+                </span>
+              } @else if (chat().status === 'delivered') {
+                <span class="status-tick delivered" aria-label="Delivered">
                   <app-svg-icon name="check2" [size]="15"></app-svg-icon>
                 </span>
               } @else if (chat().status === 'sent') {
-                <span class="status-tick" aria-label="Sent">
+                <span class="status-tick sent" aria-label="Sent">
                   <app-svg-icon name="check" [size]="15"></app-svg-icon>
                 </span>
               }
@@ -235,8 +239,14 @@ import { ChatItem } from '../../mock/mock-data';
       color: var(--muted);
       flex-shrink: 0;
 
-      &.seen {
-        color: var(--teal);
+      &.seen,
+      &.read {
+        color: #2563EB;
+      }
+
+      &.delivered,
+      &.sent {
+        color: var(--muted);
       }
     }
 

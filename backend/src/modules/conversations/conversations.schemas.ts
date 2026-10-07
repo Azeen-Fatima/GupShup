@@ -13,9 +13,11 @@ export const createConversationSchema = z.object({
         attachmentName: z.string().optional(),
         attachmentSize: z.string().optional(),
         attachmentMime: z.string().optional(),
+        clientId: z.string().optional(),
       }),
     ])
     .optional(),
+  clientId: z.string().optional(),
 }).refine((data) => data.message || data.initialMessage, {
   message: 'An initial message or message text is required',
   path: ['message'],

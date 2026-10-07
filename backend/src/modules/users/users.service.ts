@@ -68,6 +68,8 @@ export class UsersService {
         bio: true,
         statusMessage: true,
         themePreference: true,
+        passwordHash: true,
+        googleId: true,
         createdAt: true,
       },
     });
@@ -76,7 +78,12 @@ export class UsersService {
       throw new NotFoundError('User not found', 'USER_NOT_FOUND');
     }
 
-    return user;
+    const { passwordHash, googleId, ...rest } = user;
+    return {
+      ...rest,
+      hasPassword: Boolean(passwordHash),
+      authProvider: (googleId ? 'google' : 'local') as 'google' | 'local',
+    };
   }
 
   /**
@@ -100,13 +107,20 @@ export class UsersService {
         bio: true,
         statusMessage: true,
         themePreference: true,
+        passwordHash: true,
+        googleId: true,
         createdAt: true,
         updatedAt: true,
       },
     });
 
     await this.notifyUserUpdated(user);
-    return user;
+    const { passwordHash, googleId, ...rest } = user;
+    return {
+      ...rest,
+      hasPassword: Boolean(passwordHash),
+      authProvider: (googleId ? 'google' : 'local') as 'google' | 'local',
+    };
   }
 
   /**
@@ -125,12 +139,19 @@ export class UsersService {
         bio: true,
         statusMessage: true,
         themePreference: true,
+        passwordHash: true,
+        googleId: true,
         createdAt: true,
       },
     });
 
     await this.notifyUserUpdated(user);
-    return user;
+    const { passwordHash, googleId, ...rest } = user;
+    return {
+      ...rest,
+      hasPassword: Boolean(passwordHash),
+      authProvider: (googleId ? 'google' : 'local') as 'google' | 'local',
+    };
   }
 
   /**
@@ -149,16 +170,23 @@ export class UsersService {
         bio: true,
         statusMessage: true,
         themePreference: true,
+        passwordHash: true,
+        googleId: true,
         createdAt: true,
       },
     });
 
     await this.notifyUserUpdated(user);
-    return user;
+    const { passwordHash, googleId, ...rest } = user;
+    return {
+      ...rest,
+      hasPassword: Boolean(passwordHash),
+      authProvider: (googleId ? 'google' : 'local') as 'google' | 'local',
+    };
   }
 
   /**
-   * Search users excluding current user and blocked users in both directions, with relationship status
+   * Search users excluding current user, all conversation partners, and blocked users in both directions
    */
   async searchUsers(currentUserId: string, query: string) {
     const trimmed = query.trim();
@@ -172,11 +200,23 @@ export class UsersService {
       select: { blockerId: true, blockedId: true },
     });
 
+    // Find all existing conversations involving currentUserId in any status
+    const conversations = await prisma.conversation.findMany({
+      where: {
+        OR: [{ userAId: currentUserId }, { userBId: currentUserId }],
+      },
+      select: { userAId: true, userBId: true },
+    });
+
     const excludedUserIds = new Set<string>();
     excludedUserIds.add(currentUserId);
     for (const b of blocks) {
       if (b.blockerId === currentUserId) excludedUserIds.add(b.blockedId);
       if (b.blockedId === currentUserId) excludedUserIds.add(b.blockerId);
+    }
+    for (const c of conversations) {
+      if (c.userAId === currentUserId) excludedUserIds.add(c.userBId);
+      if (c.userBId === currentUserId) excludedUserIds.add(c.userAId);
     }
 
     // Find up to 30 matching users
@@ -199,54 +239,11 @@ export class UsersService {
       take: 30,
     });
 
-    if (users.length === 0) {
-      return [];
-    }
-
-    const targetUserIds = users.map((u) => u.id);
-
-    // Fetch conversations between current user and target users
-    const conversations = await prisma.conversation.findMany({
-      where: {
-        OR: [
-          { userAId: currentUserId, userBId: { in: targetUserIds } },
-          { userAId: { in: targetUserIds }, userBId: currentUserId },
-        ],
-      },
-    });
-
-    // Map relationships
-    return users.map((target) => {
-      // Check conversation status
-      const conv = conversations.find(
-        (c) =>
-          (c.userAId === currentUserId && c.userBId === target.id) ||
-          (c.userAId === target.id && c.userBId === currentUserId)
-      );
-
-      if (!conv) {
-        return {
-          ...target,
-          relationshipStatus: 'none' as RelationshipStatus,
-          conversationId: undefined,
-        };
-      }
-
-      let rel: RelationshipStatus = 'none';
-      if (conv.status === 'accepted') {
-        rel = 'accepted';
-      } else if (conv.status === 'declined') {
-        rel = 'declined';
-      } else if (conv.status === 'pending') {
-        rel = conv.requesterId === currentUserId ? 'pending_sent' : 'pending_received';
-      }
-
-      return {
-        ...target,
-        relationshipStatus: rel,
-        conversationId: conv.id,
-      };
-    });
+    return users.map((target) => ({
+      ...target,
+      relationshipStatus: 'none' as RelationshipStatus,
+      conversationId: undefined,
+    }));
   }
 
   /**

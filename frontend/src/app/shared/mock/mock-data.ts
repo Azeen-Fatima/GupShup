@@ -7,6 +7,8 @@ export interface CurrentUser {
   email: string;
   initials: string;
   photoUrl: string | null;
+  hasPassword?: boolean;
+  authProvider?: 'local' | 'google';
 }
 
 export interface MessageAttachment {
@@ -19,12 +21,13 @@ export interface MessageAttachment {
 
 export interface ChatMessage {
   id: string;
+  clientId?: string;
   chatId: string;
   text: string;
   sender: 'me' | 'them';
   timestamp: string;
   timeString: string;
-  status?: 'sent' | 'seen' | 'pending' | 'failed';
+  status?: 'sent' | 'delivered' | 'seen' | 'read' | 'pending' | 'failed';
   attachment?: MessageAttachment;
   isFirstUnread?: boolean;
 }
@@ -38,7 +41,7 @@ export interface ChatItem {
   lastMessage: string;
   time: string;
   unreadCount: number;
-  status?: 'sent' | 'seen' | 'pending' | 'failed';
+  status?: 'sent' | 'delivered' | 'seen' | 'read' | 'pending' | 'failed';
   isDeclined?: boolean;
   isBlocked?: boolean;
   isBlockedByThem?: boolean;

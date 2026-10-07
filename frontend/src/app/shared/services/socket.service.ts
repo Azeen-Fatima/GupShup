@@ -24,6 +24,20 @@ export interface MessageSeenPayload {
   seenAt: string;
 }
 
+export interface MessageDeliveredPayload {
+  messageId?: string;
+  clientId?: string;
+  conversationId: string;
+  deliveredAt: string;
+}
+
+export interface MessageReadPayload {
+  conversationId: string;
+  seenBy?: string;
+  seenAt: string;
+  readAt?: string;
+}
+
 export interface NewMessagePayload {
   conversationId: string;
   message: Message;
@@ -52,6 +66,8 @@ export class SocketService implements OnDestroy {
   // Observable event streams
   readonly messageNew$ = new Subject<NewMessagePayload>();
   readonly messageSeen$ = new Subject<MessageSeenPayload>();
+  readonly messageDelivered$ = new Subject<MessageDeliveredPayload>();
+  readonly messageRead$ = new Subject<MessageReadPayload>();
   readonly presenceUpdate$ = new Subject<PresenceUpdatePayload>();
   readonly typingUpdate$ = new Subject<TypingUpdatePayload>();
   readonly conversationUpdated$ = new Subject<{ conversationId: string; [key: string]: any }>();
@@ -59,6 +75,7 @@ export class SocketService implements OnDestroy {
   readonly requestNew$ = new Subject<{ conversationId: string; [key: string]: any }>();
   readonly requestAccepted$ = new Subject<{ conversationId: string; [key: string]: any }>();
   readonly requestDeclined$ = new Subject<{ conversationId: string; [key: string]: any }>();
+  readonly reconnected$ = new Subject<void>();
 
   constructor() {
     // Automatically manage connection lifecycle based on authentication signal
@@ -73,7 +90,7 @@ export class SocketService implements OnDestroy {
   }
 
   /**
-   * Connect to Socket.io server
+   * Connect to Socket.io server with fallback transports and clean reconnection
    */
   connect(token: string): void {
     if (this.socket?.connected) return;
@@ -81,10 +98,12 @@ export class SocketService implements OnDestroy {
     this.socket = io(environment.socketUrl, {
       auth: { token },
       withCredentials: true,
-      transports: ['websocket', 'polling'],
+      transports: ['polling', 'websocket'],
       reconnection: true,
-      reconnectionAttempts: 10,
-      reconnectionDelay: 2000,
+      reconnectionAttempts: Infinity,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000,
+      randomizationFactor: 0.5,
     });
 
     this.socket.on('connect', () => {
@@ -99,6 +118,15 @@ export class SocketService implements OnDestroy {
       }, 25000);
     });
 
+    this.socket.io.on('reconnect', () => {
+      // Refetch chat list on reconnect
+      this.conversationsService.loadConversations().subscribe();
+      if (this.socket?.connected) {
+        this.socket.emit('presence:heartbeat');
+      }
+      this.reconnected$.next();
+    });
+
     this.socket.on('disconnect', () => {
       this.isConnected.set(false);
       this.clearHeartbeat();
@@ -106,10 +134,29 @@ export class SocketService implements OnDestroy {
 
     this.socket.on('message:new', (data: NewMessagePayload) => {
       const activeId = this.conversationsService.activeConversationId();
-      const isCurrentActive = activeId === data.conversationId;
+      const isCurrentActive = activeId === data.conversationId && !document.hidden;
 
       this.conversationsService.handleNewMessage(data.conversationId, data.message, isCurrentActive);
       this.messageNew$.next(data);
+
+      const myId = this.authService.currentUser()?.id;
+      if (myId && data.message.senderId !== myId) {
+        if (isCurrentActive) {
+          this.markRead(data.conversationId);
+        } else {
+          this.markDelivered(data.message.id, data.conversationId, data.message.clientId || undefined);
+        }
+      }
+    });
+
+    this.socket.on('message:delivered', (data: MessageDeliveredPayload) => {
+      this.conversationsService.handleMessageDelivered(data);
+      this.messageDelivered$.next(data);
+    });
+
+    this.socket.on('message:read', (data: MessageReadPayload) => {
+      this.conversationsService.handleMessagesSeen(data.conversationId, data.seenAt || data.readAt!);
+      this.messageRead$.next(data);
     });
 
     this.socket.on('message:seen', (data: MessageSeenPayload) => {
@@ -150,6 +197,24 @@ export class SocketService implements OnDestroy {
       this.conversationsService.updateUserProfile(data);
       this.userUpdated$.next(data);
     });
+  }
+
+  /**
+   * Send delivered acknowledgement
+   */
+  markDelivered(messageId?: string, conversationId?: string, clientId?: string): void {
+    if (this.socket?.connected) {
+      this.socket.emit('message:delivered', { messageId, conversationId, clientId });
+    }
+  }
+
+  /**
+   * Send read acknowledgement
+   */
+  markRead(conversationId: string): void {
+    if (this.socket?.connected) {
+      this.socket.emit('message:read', { conversationId });
+    }
   }
 
   /**

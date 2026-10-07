@@ -12,7 +12,7 @@ export function initSocketServer(httpServer: HttpServer): Server {
   const allowedOrigins = getAllowedOrigins();
 
   const options: Partial<ServerOptions> = {
-    transports: ['websocket', 'polling'],
+    transports: ['polling', 'websocket'],
     cors: {
       origin: (origin, callback) => {
         // Allow requests with no origin (like mobile apps, curl, or tests)

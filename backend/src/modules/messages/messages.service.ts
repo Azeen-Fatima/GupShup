@@ -75,6 +75,29 @@ export class MessagesService {
    * Send a message in a conversation
    */
   async sendMessage(conversationId: string, userId: string, input: SendMessageInput) {
+    if (input.clientId) {
+      const existing = await prisma.message.findFirst({
+        where: {
+          conversationId,
+          senderId: userId,
+          clientId: input.clientId,
+        },
+        include: {
+          sender: {
+            select: {
+              id: true,
+              name: true,
+              username: true,
+              avatarUrl: true,
+            },
+          },
+        },
+      });
+      if (existing) {
+        return existing;
+      }
+    }
+
     const member = await prisma.conversationMember.findUnique({
       where: {
         conversationId_userId: { conversationId, userId },
@@ -136,6 +159,7 @@ export class MessagesService {
               senderId: userId,
               type: 'text',
               body: input.body || null,
+              clientId: input.clientId || null,
             },
             include: {
               sender: {
@@ -246,6 +270,7 @@ export class MessagesService {
         attachmentName: input.attachmentName || null,
         attachmentSize: input.attachmentSize || null,
         attachmentMime: input.attachmentMime || null,
+        clientId: input.clientId || null,
       },
       include: {
         sender: {
@@ -317,7 +342,7 @@ export class MessagesService {
           senderId: { not: userId },
           seenAt: null,
         },
-        data: { seenAt: now },
+        data: { seenAt: now, deliveredAt: now },
       }),
     ]);
 
@@ -327,6 +352,12 @@ export class MessagesService {
         : member.conversation.userAId;
 
     if (otherUserId !== userId) {
+      emitToUser(otherUserId, 'message:read', {
+        conversationId,
+        seenBy: userId,
+        seenAt: now,
+        readAt: now,
+      });
       emitToUser(otherUserId, 'message:seen', {
         conversationId,
         seenBy: userId,

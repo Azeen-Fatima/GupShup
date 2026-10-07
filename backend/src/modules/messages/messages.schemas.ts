@@ -8,6 +8,7 @@ export const sendMessageSchema = z
     attachmentName: z.string().optional(),
     attachmentSize: z.string().optional(),
     attachmentMime: z.string().optional(),
+    clientId: z.string().optional(),
   })
   .refine((data) => (data.body && data.body.length > 0) || data.attachmentUrl, {
     message: 'Message must have either a text body or an attachment URL',

@@ -165,36 +165,43 @@ export class ConversationsService {
           },
         });
 
-        return {
-          id: conv.id,
-          status:
-            conv.status === 'blocked' && !conv.wasAccepted && isBlockedByThem ? 'pending' : conv.status,
-          state,
-          isSelf,
-          isBlockedByMe: false,
-          isBlockedByThem: effectiveBlockedByThem,
-          declineCount: conv.declineCount,
-          declinedAt: conv.declinedAt,
-          canSendExtraMessage,
-          createdAt: conv.createdAt,
-          lastMessageAt: conv.lastMessageAt || conv.createdAt,
-          otherUser: {
-            ...otherUser,
-            isOnline: isSelf ? true : !!onlineMap[otherUser.id],
-          },
-          lastMessage: lastMessage
-            ? {
-                id: lastMessage.id,
-                body: lastMessage.body,
-                type: lastMessage.type,
-                senderId: lastMessage.senderId,
-                createdAt: lastMessage.createdAt,
-                seenAt: lastMessage.seenAt,
-                attachmentUrl: lastMessage.attachmentUrl,
-              }
-            : null,
-          unreadCount,
-        };
+          const showPresence = isSelf || conv.status === 'accepted';
+          const isOnline = showPresence ? (isSelf ? true : !!onlineMap[otherUser.id]) : false;
+          const lastSeen = showPresence && !isSelf ? await presenceService.getLastSeen(otherUser.id) : null;
+
+          return {
+            id: conv.id,
+            status:
+              conv.status === 'blocked' && !conv.wasAccepted && isBlockedByThem ? 'pending' : conv.status,
+            state,
+            isSelf,
+            isBlockedByMe: false,
+            isBlockedByThem: effectiveBlockedByThem,
+            declineCount: conv.declineCount,
+            declinedAt: conv.declinedAt,
+            canSendExtraMessage,
+            createdAt: conv.createdAt,
+            lastMessageAt: conv.lastMessageAt || conv.createdAt,
+            otherUser: {
+              ...otherUser,
+              isOnline,
+              lastSeen,
+            },
+            lastMessage: lastMessage
+              ? {
+                  id: lastMessage.id,
+                  body: lastMessage.body,
+                  type: lastMessage.type,
+                  senderId: lastMessage.senderId,
+                  createdAt: lastMessage.createdAt,
+                  deliveredAt: lastMessage.deliveredAt,
+                  seenAt: lastMessage.seenAt,
+                  attachmentUrl: lastMessage.attachmentUrl,
+                  clientId: lastMessage.clientId,
+                }
+              : null,
+            unreadCount,
+          };
       })
     );
 
@@ -311,8 +318,9 @@ export class ConversationsService {
       canSendExtraMessage = extraSent === 0;
     }
 
-    const isOnline = isSelf ? true : await presenceService.isOnline(otherUser.id);
-    const lastSeen = isSelf ? null : await presenceService.getLastSeen(otherUser.id);
+    const showPresence = isSelf || conv.status === 'accepted';
+    const isOnline = showPresence ? (isSelf ? true : await presenceService.isOnline(otherUser.id)) : false;
+    const lastSeen = showPresence && !isSelf ? await presenceService.getLastSeen(otherUser.id) : null;
 
     return {
       id: conv.id,
@@ -546,6 +554,36 @@ export class ConversationsService {
       body = data.message;
     }
 
+    let clientId: string | null = null;
+    if (typeof data.initialMessage === 'object' && (data.initialMessage as any).clientId) {
+      clientId = (data.initialMessage as any).clientId;
+    } else if ((data as any).clientId) {
+      clientId = (data as any).clientId;
+    }
+
+    if (clientId) {
+      const existing = await prisma.message.findFirst({
+        where: {
+          conversationId,
+          senderId,
+          clientId,
+        },
+        include: {
+          sender: {
+            select: {
+              id: true,
+              name: true,
+              username: true,
+              avatarUrl: true,
+            },
+          },
+        },
+      });
+      if (existing) {
+        return { conversationId, message: existing };
+      }
+    }
+
     const message = await prisma.message.create({
       data: {
         conversationId,
@@ -556,6 +594,7 @@ export class ConversationsService {
         attachmentName,
         attachmentSize,
         attachmentMime,
+        clientId,
       },
       include: {
         sender: {
@@ -656,6 +695,25 @@ export class ConversationsService {
         conversationId,
         status: 'accepted',
       });
+
+      // Presence unhides live
+      Promise.all([
+        presenceService.isOnline(userId),
+        presenceService.getLastSeen(userId),
+        presenceService.isOnline(otherMember.userId),
+        presenceService.getLastSeen(otherMember.userId),
+      ]).then(([userOnline, userLastSeen, otherOnline, otherLastSeen]) => {
+        emitToUser(otherMember.userId, 'presence:update', {
+          userId,
+          isOnline: userOnline,
+          lastSeen: userLastSeen,
+        });
+        emitToUser(userId, 'presence:update', {
+          userId: otherMember.userId,
+          isOnline: otherOnline,
+          lastSeen: otherLastSeen,
+        });
+      });
     }
 
     emitToUser(userId, 'request:accepted', {
@@ -714,6 +772,18 @@ export class ConversationsService {
         status: 'declined',
         declineCount: nextDeclineCount,
       });
+
+      // Presence hides live
+      emitToUser(otherMember.userId, 'presence:update', {
+        userId,
+        isOnline: false,
+        lastSeen: null,
+      });
+      emitToUser(userId, 'presence:update', {
+        userId: otherMember.userId,
+        isOnline: false,
+        lastSeen: null,
+      });
     }
 
     emitToUser(userId, 'request:declined', {
@@ -768,14 +838,24 @@ export class ConversationsService {
       },
     });
 
-    // Blocker gets updated list
+    // Blocker gets updated list and partner is hidden
     emitToUser(userId, 'conversation:updated', { conversationId });
+    emitToUser(userId, 'presence:update', {
+      userId: targetUserId,
+      isOnline: false,
+      lastSeen: null,
+    });
 
     // Target user:
     // If blocked while pending: SILENT (must NOT learn about the block)
-    // If blocked after accepted: NEUTRAL conversation:updated event
+    // If blocked after accepted: NEUTRAL conversation:updated event and presence hide
     if (!isSilentBlock) {
       emitToUser(targetUserId, 'conversation:updated', { conversationId });
+      emitToUser(targetUserId, 'presence:update', {
+        userId,
+        isOnline: false,
+        lastSeen: null,
+      });
     }
 
     return { success: true };

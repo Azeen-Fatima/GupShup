@@ -62,12 +62,12 @@ import { EmptyStateComponent } from '../../../shared/components/empty-state/empt
             [name]="chat()!.name"
             [initials]="chat()!.initials"
             [size]="'md'"
-            [showOnlineDot]="chat()!.isOnline"
+            [showOnlineDot]="((chat()!.rawStatus === 'accepted' || chat()!.isSelfNotes) && chat()!.isOnline) ? true : false"
           ></app-avatar>
 
           <div class="chat-meta">
             <h2 class="chat-name">{{ chat()!.name }}</h2>
-            <div class="chat-status" [class.online]="chat()!.isOnline || isTyping()">
+            <div class="chat-status" [class.online]="(chat()!.rawStatus === 'accepted' || chat()!.isSelfNotes) && (chat()!.isOnline || isTyping())">
               {{ getStatusText() }}
             </div>
           </div>
@@ -1178,7 +1178,23 @@ export class ChatDetailComponent implements OnDestroy {
     });
 
     this.setupSocketListeners();
+    document.addEventListener('visibilitychange', this.onVisibilityChange);
   }
+
+  private onVisibilityChange = () => {
+    const id = this.chatId();
+    if (document.hidden) {
+      this.conversationsService.activeConversationId.set(null);
+    } else {
+      if (id) {
+        this.conversationsService.activeConversationId.set(id);
+        if (!id.startsWith('new-')) {
+          this.messagesService.markSeen(id).subscribe();
+          this.socketService.markRead(id);
+        }
+      }
+    }
+  };
 
   private setupDraftChat(targetUserId: string): void {
     this.messages.set([]);
@@ -1281,19 +1297,25 @@ export class ChatDetailComponent implements OnDestroy {
   }
 
   /**
-   * Upsert message ensuring deduplication (E1, B3)
+   * Upsert message ensuring deduplication (E1, B3) by clientId and message id
    */
   private upsertMessage(msg: ChatMessage, tempIdToReplace?: string): void {
     this.messages.update((list) => {
-      if (tempIdToReplace) {
-        const tempIdx = list.findIndex((m) => m.id === tempIdToReplace);
+      const matchClientId = tempIdToReplace || msg.clientId;
+
+      // 1. If tempIdToReplace or msg.clientId is present, replace matching temp message
+      if (matchClientId) {
+        const tempIdx = list.findIndex(
+          (m) => m.id === matchClientId || (m.clientId && m.clientId === matchClientId)
+        );
         if (tempIdx !== -1) {
           const copy = [...list];
-          copy[tempIdx] = msg;
+          copy[tempIdx] = { ...msg, clientId: matchClientId };
           return copy;
         }
       }
 
+      // 2. If message id already exists, update in-place
       const existingIdx = list.findIndex((m) => m.id === msg.id);
       if (existingIdx !== -1) {
         const copy = [...list];
@@ -1301,14 +1323,14 @@ export class ChatDetailComponent implements OnDestroy {
         return copy;
       }
 
-      // If sent message matches an existing pending optimistic message
+      // 3. Fallback matching for pending optimistic messages from 'me'
       if (msg.sender === 'me') {
         const pendingIdx = list.findIndex(
           (m) =>
             m.status === 'pending' &&
             m.sender === 'me' &&
-            m.text === msg.text &&
-            (!m.attachment || m.attachment.url === msg.attachment?.url)
+            ((msg.clientId && m.clientId === msg.clientId) ||
+              (m.text === msg.text && (!m.attachment || m.attachment.name === msg.attachment?.name)))
         );
         if (pendingIdx !== -1) {
           const copy = [...list];
@@ -1328,7 +1350,7 @@ export class ChatDetailComponent implements OnDestroy {
         if (data.conversationId === this.chatId()) {
           const myId = this.authService.currentUser()?.id;
           const formatted = formatMessageToChatMessage(data.message, myId);
-          this.upsertMessage(formatted);
+          this.upsertMessage(formatted, data.message.clientId || undefined);
 
           if (data.message.senderId === myId) {
             this.scrollToBottom();
@@ -1336,13 +1358,38 @@ export class ChatDetailComponent implements OnDestroy {
             if (!this.showScrollBottomBtn()) {
               this.scrollToBottomSmooth();
             }
-            this.messagesService.markSeen(this.chatId()).subscribe();
+            if (!document.hidden) {
+              this.messagesService.markSeen(this.chatId()).subscribe();
+              this.socketService.markRead(this.chatId());
+            }
           }
         }
       })
     );
 
-    // 2. Real-time seen receipts
+    // 2. Real-time delivered receipts
+    this.subscriptions.push(
+      this.socketService.messageDelivered$.subscribe((data) => {
+        if (data.conversationId === this.chatId()) {
+          this.messages.update((list) =>
+            list.map((m) => {
+              if (m.sender === 'me' && (m.status === 'sent' || m.status === 'pending')) {
+                if (
+                  (data.messageId && m.id === data.messageId) ||
+                  (data.clientId && m.clientId === data.clientId) ||
+                  !data.messageId
+                ) {
+                  return { ...m, status: 'delivered' as const };
+                }
+              }
+              return m;
+            })
+          );
+        }
+      })
+    );
+
+    // 3. Real-time seen receipts
     this.subscriptions.push(
       this.socketService.messageSeen$.subscribe((data) => {
         if (data.conversationId === this.chatId()) {
@@ -1355,13 +1402,29 @@ export class ChatDetailComponent implements OnDestroy {
       })
     );
 
-    // 3. Real-time typing indicators
+    this.subscriptions.push(
+      this.socketService.messageRead$.subscribe((data) => {
+        if (data.conversationId === this.chatId()) {
+          this.messages.update((list) =>
+            list.map((m) =>
+              m.sender === 'me' ? { ...m, status: 'seen' as const } : m
+            )
+          );
+        }
+      })
+    );
+
+    // 4. Real-time typing indicators (only for accepted chats)
     this.subscriptions.push(
       this.socketService.typingUpdate$.subscribe((data) => {
         const myId = this.authService.currentUser()?.id;
         if (data.userId === myId) return;
 
         const currentChat = this.chat();
+        if (currentChat && currentChat.rawStatus !== 'accepted' && !currentChat.isSelfNotes) {
+          return;
+        }
+
         const otherUserId =
           currentChat?.otherUserId ||
           (this.chatId().startsWith('new-') ? this.chatId().replace('new-', '') : null);
@@ -1375,11 +1438,11 @@ export class ChatDetailComponent implements OnDestroy {
       })
     );
 
-    // 4. Real-time presence updates
+    // 5. Real-time presence updates (only for accepted chats)
     this.subscriptions.push(
       this.socketService.presenceUpdate$.subscribe((data) => {
         const currentChat = this.chat();
-        if (currentChat && !currentChat.isSelfNotes) {
+        if (currentChat && !currentChat.isSelfNotes && currentChat.rawStatus === 'accepted') {
           const otherUserId =
             currentChat.otherUserId ||
             (this.chatId().startsWith('new-') ? this.chatId().replace('new-', '') : null);
@@ -1399,7 +1462,7 @@ export class ChatDetailComponent implements OnDestroy {
       })
     );
 
-    // 5. Real-time user profile updates (D4)
+    // 6. Real-time user profile updates (D4)
     this.subscriptions.push(
       this.socketService.userUpdated$.subscribe((data) => {
         const currentChat = this.chat();
@@ -1417,7 +1480,7 @@ export class ChatDetailComponent implements OnDestroy {
       })
     );
 
-    // 6. Real-time conversation and request state updates
+    // 7. Real-time conversation and request state updates
     this.subscriptions.push(
       this.socketService.conversationUpdated$.subscribe((data) => {
         if (data.conversationId === this.chatId()) {
@@ -1438,6 +1501,16 @@ export class ChatDetailComponent implements OnDestroy {
       this.socketService.requestDeclined$.subscribe((data) => {
         if (data.conversationId === this.chatId()) {
           this.reloadConversationMetadata();
+        }
+      })
+    );
+
+    // 8. Reconnect catch-up sync
+    this.subscriptions.push(
+      this.socketService.reconnected$.subscribe(() => {
+        const id = this.chatId();
+        if (id && !id.startsWith('new-')) {
+          this.loadConversation(id);
         }
       })
     );
@@ -1483,13 +1556,17 @@ export class ChatDetailComponent implements OnDestroy {
   }
 
   getStatusText(): string {
-    if (this.isTyping()) {
-      return 'typing...';
-    }
     const c = this.chat();
     if (!c) return '';
     if (c.isSelfNotes) {
       return 'Message yourself';
+    }
+    // Only show presence / typing if conversation is accepted
+    if (c.rawStatus !== 'accepted') {
+      return '';
+    }
+    if (this.isTyping()) {
+      return 'typing...';
     }
     if (c.isOnline) {
       return 'Online';
@@ -1497,7 +1574,7 @@ export class ChatDetailComponent implements OnDestroy {
     if (c.lastSeen) {
       return this.formatLastSeen(c.lastSeen);
     }
-    return 'Offline';
+    return '';
   }
 
   private formatLastSeen(iso: string): string {
@@ -1729,6 +1806,7 @@ export class ChatDetailComponent implements OnDestroy {
     const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const optimisticMsg: ChatMessage = {
       id: tempId,
+      clientId: tempId,
       chatId: currentId,
       text,
       sender: 'me',
@@ -1803,7 +1881,7 @@ export class ChatDetailComponent implements OnDestroy {
   }
 
   private createAndSendConv(recipientId: string, text: string, tempId: string, attachment?: any): void {
-    this.conversationsService.createConversation(recipientId, text, attachment).subscribe({
+    this.conversationsService.createConversation(recipientId, text, attachment, tempId).subscribe({
       next: (res) => {
         const myId = this.authService.currentUser()?.id;
         const formatted = formatMessageToChatMessage(res.message, myId);
@@ -1819,7 +1897,8 @@ export class ChatDetailComponent implements OnDestroy {
   }
 
   private executeSendMessage(conversationId: string, payload: any, tempId?: string): void {
-    this.messagesService.sendMessage(conversationId, payload).subscribe({
+    const finalPayload = { ...payload, ...(tempId ? { clientId: tempId } : {}) };
+    this.messagesService.sendMessage(conversationId, finalPayload).subscribe({
       next: (msg) => {
         const myId = this.authService.currentUser()?.id;
         const formatted = formatMessageToChatMessage(msg, myId);
@@ -1874,7 +1953,7 @@ export class ChatDetailComponent implements OnDestroy {
       payload.attachmentName = msg.attachment.name;
     }
 
-    this.executeSendMessage(currentId, payload, msg.id);
+    this.executeSendMessage(currentId, payload, msg.clientId || msg.id);
   }
 
   // Request actions (Incoming)
@@ -2020,6 +2099,8 @@ export class ChatDetailComponent implements OnDestroy {
   }
 
   ngOnDestroy(): void {
+    document.removeEventListener('visibilitychange', this.onVisibilityChange);
+    this.conversationsService.activeConversationId.set(null);
     this.subscriptions.forEach((s) => s.unsubscribe());
     this.subscriptions = [];
     if (this.typingStopTimer) {
