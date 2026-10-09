@@ -20,6 +20,7 @@ import { UsersService } from '../../../shared/services/users.service';
 import { SocketService } from '../../../shared/services/socket.service';
 import { AuthService } from '../../../shared/services/auth.service';
 import { ToastService } from '../../../shared/services/toast.service';
+import { ChatLockService } from '../../../shared/services/chat-lock.service';
 import {
   formatConversationToChatItem,
   formatMessageToChatMessage,
@@ -57,18 +58,34 @@ import { EmptyStateComponent } from '../../../shared/components/empty-state/empt
         </a>
 
         @if (chat()) {
-          <app-avatar
-            [avatarUrl]="chat()!.photoUrl"
-            [name]="chat()!.name"
-            [initials]="chat()!.initials"
-            [size]="'md'"
-            [showOnlineDot]="((chat()!.rawStatus === 'accepted' || chat()!.isSelfNotes) && chat()!.isOnline) ? true : false"
-          ></app-avatar>
+          <div
+            class="header-user-info"
+            [class.clickable]="isAcceptedChat()"
+            (click)="onHeaderUserClick()"
+            [attr.role]="isAcceptedChat() ? 'button' : null"
+            [attr.tabindex]="isAcceptedChat() ? 0 : null"
+            [title]="isAcceptedChat() ? 'View contact info' : ''"
+          >
+            <app-avatar
+              [avatarUrl]="chat()!.photoUrl"
+              [name]="chat()!.name"
+              [initials]="chat()!.initials"
+              [size]="'md'"
+              [showOnlineDot]="((chat()!.rawStatus === 'accepted' || chat()!.isSelfNotes) && chat()!.isOnline) ? true : false"
+            ></app-avatar>
 
-          <div class="chat-meta">
-            <h2 class="chat-name">{{ chat()!.name }}</h2>
-            <div class="chat-status" [class.online]="(chat()!.rawStatus === 'accepted' || chat()!.isSelfNotes) && (chat()!.isOnline || isTyping())">
-              {{ getStatusText() }}
+            <div class="chat-meta">
+              <div class="chat-name-row">
+                <h2 class="chat-name">{{ chat()!.name }}</h2>
+                @if (chat()!.isLocked) {
+                  <span class="header-lock-icon" title="Chat locked">
+                    <app-svg-icon name="lock" [size]="14"></app-svg-icon>
+                  </span>
+                }
+              </div>
+              <div class="chat-status" [class.online]="(chat()!.rawStatus === 'accepted' || chat()!.isSelfNotes) && (chat()!.isOnline || isTyping())">
+                {{ getStatusText() }}
+              </div>
             </div>
           </div>
 
@@ -92,8 +109,16 @@ import { EmptyStateComponent } from '../../../shared/components/empty-state/empt
                   <button type="button" class="menu-item" (click)="promptClearChat()" role="menuitem">
                     Clear chat
                   </button>
+                } @else if (chat()!.rawStatus === 'accepted') {
+                  <!-- Accepted chats: strictly View profile and Clear chat -->
+                  <button type="button" class="menu-item" (click)="viewProfile()" role="menuitem">
+                    View profile
+                  </button>
+                  <button type="button" class="menu-item" (click)="promptClearChat()" role="menuitem">
+                    Clear chat
+                  </button>
                 } @else if (chat()!.isIncomingRequest) {
-                  <!-- Received pending: only Block -->
+                  <!-- Received pending: only Block/Unblock -->
                   @if (chat()!.isBlocked) {
                     <button type="button" class="menu-item" (click)="unblockCurrentChat()" role="menuitem">
                       Unblock
@@ -104,7 +129,7 @@ import { EmptyStateComponent } from '../../../shared/components/empty-state/empt
                     </button>
                   }
                 } @else {
-                  <!-- After accepted: Block, Clear, Delete -->
+                  <!-- Sender pending, declined, blocked -->
                   @if (chat()!.isBlocked) {
                     <button type="button" class="menu-item" (click)="unblockCurrentChat()" role="menuitem">
                       Unblock
@@ -135,7 +160,42 @@ import { EmptyStateComponent } from '../../../shared/components/empty-state/empt
 
       <!-- Message History Area -->
       <div #messageContainer class="chat-body" (scroll)="onScroll($event)" role="log" aria-live="polite">
-        @if (loadError() === 'error') {
+        @if (isChatLockedAndProtected()) {
+          <div class="chat-locked-panel" role="region" aria-label="Chat locked">
+            <div class="lock-shield-circle">
+              <app-svg-icon name="lock" [size]="32"></app-svg-icon>
+            </div>
+            <h3 class="lock-panel-title">Chat Locked</h3>
+            <p class="lock-panel-desc">Enter your 4-digit PIN to read messages with {{ chat()?.name }}.</p>
+
+            <div class="pin-entry-container">
+              <input
+                type="password"
+                inputmode="numeric"
+                pattern="[0-9]*"
+                maxlength="4"
+                [(ngModel)]="unlockPinInput"
+                placeholder="••••"
+                class="detail-pin-field"
+                (keydown.enter)="submitDetailUnlock()"
+              />
+            </div>
+
+            @if (unlockPinError()) {
+              <p class="detail-pin-error">{{ unlockPinError() }}</p>
+            }
+
+            <div class="lock-panel-actions">
+              <button type="button" class="detail-unlock-btn" (click)="submitDetailUnlock()">
+                Unlock
+              </button>
+            </div>
+
+            <button type="button" class="forgot-pin-btn" (click)="openForgotPinModal()">
+              Forgot PIN?
+            </button>
+          </div>
+        } @else if (loadError() === 'error') {
           <div class="chat-error-banner" role="alert">
             <app-svg-icon name="wifi-off" [size]="28"></app-svg-icon>
             <p class="error-msg">Something went wrong. Tap to retry.</p>
@@ -292,8 +352,10 @@ import { EmptyStateComponent } from '../../../shared/components/empty-state/empt
         (change)="onFileChosen($event, 'file')"
       />
 
-      <!-- Blocked User Replacement Banner -->
-      @if (chat()?.isBlocked) {
+      <!-- Locked Chat (hide composer) -->
+      @if (isChatLockedAndProtected()) {
+        <!-- Hidden when chat is locked -->
+      } @else if (chat()?.isBlocked) {
         <div class="blocked-composer-strip">
           <span>You blocked this user</span>
           <button type="button" class="teal-unblock-btn" (click)="unblockCurrentChat()">
@@ -390,6 +452,68 @@ import { EmptyStateComponent } from '../../../shared/components/empty-state/empt
       >
         <p>{{ modalState().message }}</p>
       </app-modal>
+
+      <!-- Forgot PIN Modal -->
+      @if (forgotPinModalOpen()) {
+        <div class="pin-modal-backdrop" (click)="closeForgotPinModal()" role="presentation">
+          <div class="pin-modal-card" (click)="$event.stopPropagation()">
+            <div class="pin-icon-wrap">
+              <app-svg-icon name="shield" [size]="28"></app-svg-icon>
+            </div>
+            <h3 class="pin-title">Reset Chat Lock PIN</h3>
+            @if (isGoogleUser()) {
+              <p class="pin-desc">
+                Enter a new 4-digit PIN for your locked chats.
+              </p>
+            } @else {
+              <p class="pin-desc">
+                Enter your account password and choose a new 4-digit PIN.
+              </p>
+              <div class="pin-input-wrap">
+                <input
+                  type="password"
+                  [(ngModel)]="resetPasswordInput"
+                  placeholder="Account password"
+                  class="pin-field"
+                />
+              </div>
+            }
+
+            <div class="pin-input-wrap">
+              <input
+                type="password"
+                inputmode="numeric"
+                pattern="[0-9]*"
+                maxlength="4"
+                [(ngModel)]="resetNewPinInput"
+                placeholder="New 4-digit PIN"
+                class="pin-field"
+              />
+            </div>
+
+            <div class="pin-input-wrap">
+              <input
+                type="password"
+                inputmode="numeric"
+                pattern="[0-9]*"
+                maxlength="4"
+                [(ngModel)]="resetConfirmPinInput"
+                placeholder="Confirm new PIN"
+                class="pin-field"
+              />
+            </div>
+
+            @if (resetPinError()) {
+              <p class="pin-error">{{ resetPinError() }}</p>
+            }
+
+            <div class="pin-actions">
+              <button type="button" class="btn-ghost" (click)="closeForgotPinModal()">Cancel</button>
+              <button type="button" class="btn-primary" (click)="submitResetPin()">Save & Unlock</button>
+            </div>
+          </div>
+        </div>
+      }
     </div>
   `,
   styles: [`
@@ -447,10 +571,37 @@ import { EmptyStateComponent } from '../../../shared/components/empty-state/empt
       }
     }
 
+    .header-user-info {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex: 1;
+      min-width: 0;
+
+      &.clickable {
+        cursor: pointer;
+        border-radius: 8px;
+        padding: 4px 6px;
+        margin: -4px -6px;
+        transition: background-color 0.15s ease;
+
+        &:hover {
+          background-color: var(--hover);
+        }
+      }
+    }
+
     .chat-meta {
       display: flex;
       flex-direction: column;
       flex: 1;
+      min-width: 0;
+    }
+
+    .chat-name-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
       min-width: 0;
     }
 
@@ -461,6 +612,12 @@ import { EmptyStateComponent } from '../../../shared/components/empty-state/empt
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
+    }
+
+    .header-lock-icon {
+      color: var(--amber);
+      display: inline-flex;
+      align-items: center;
     }
 
     .chat-status {
@@ -1024,9 +1181,234 @@ import { EmptyStateComponent } from '../../../shared/components/empty-state/empt
       to { opacity: 1; }
     }
 
-    @keyframes pulse {
-      0%, 100% { opacity: 0.6; }
-      50% { opacity: 0.25; }
+    .chat-locked-panel {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      margin: auto;
+      max-width: 320px;
+      width: 100%;
+      padding: 32px 20px;
+      text-align: center;
+      background-color: var(--input);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      animation: fadeIn 0.2s ease;
+    }
+
+    .lock-shield-circle {
+      width: 64px;
+      height: 64px;
+      border-radius: 50%;
+      background-color: rgba(232, 162, 61, 0.15);
+      color: var(--amber-text);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 16px;
+    }
+
+    .lock-panel-title {
+      font-size: 18px;
+      font-weight: 800;
+      color: var(--ink);
+      margin: 0 0 6px;
+    }
+
+    .lock-panel-desc {
+      font-size: 13px;
+      color: var(--muted);
+      margin: 0 0 20px;
+      line-height: 1.4;
+    }
+
+    .pin-entry-container {
+      width: 100%;
+      max-width: 180px;
+      margin-bottom: 12px;
+    }
+
+    .detail-pin-field {
+      width: 100%;
+      text-align: center;
+      letter-spacing: 0.35em;
+      font-size: 24px;
+      font-weight: 700;
+      padding: 10px 14px;
+      border-radius: 12px;
+      border: 1.5px solid var(--border);
+      background-color: var(--card);
+      color: var(--ink);
+      outline: none;
+
+      &:focus {
+        border-color: var(--amber);
+        box-shadow: 0 0 0 3px rgba(232, 162, 61, 0.2);
+      }
+    }
+
+    .detail-pin-error {
+      font-size: 12px;
+      color: var(--danger);
+      margin: 0 0 12px;
+      font-weight: 600;
+    }
+
+    .lock-panel-actions {
+      width: 100%;
+      max-width: 180px;
+      margin-bottom: 12px;
+    }
+
+    .detail-unlock-btn {
+      width: 100%;
+      padding: 10px 16px;
+      border-radius: 999px;
+      border: none;
+      background-color: var(--amber);
+      color: var(--on-amber);
+      font-size: 13.5px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: transform 0.15s ease, box-shadow 0.15s ease;
+
+      &:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 3px 10px rgba(232, 162, 61, 0.3);
+      }
+    }
+
+    .forgot-pin-btn {
+      background: none;
+      border: none;
+      color: var(--muted);
+      font-size: 12.5px;
+      font-weight: 600;
+      cursor: pointer;
+      text-decoration: underline;
+      padding: 4px 8px;
+
+      &:hover {
+        color: var(--amber-text);
+      }
+    }
+
+    /* Modal Backdrop and Card for Reset PIN */
+    .pin-modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background-color: rgba(0, 0, 0, 0.5);
+      backdrop-filter: blur(2px);
+      z-index: 100;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+      animation: fadeIn 0.2s ease;
+    }
+
+    .pin-modal-card {
+      background-color: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 24px 20px;
+      width: 100%;
+      max-width: 360px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.15);
+      animation: popIn 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    .pin-icon-wrap {
+      width: 52px;
+      height: 52px;
+      border-radius: 50%;
+      background-color: rgba(232, 162, 61, 0.15);
+      color: var(--amber-text);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 14px;
+    }
+
+    .pin-title {
+      font-size: 17px;
+      font-weight: 800;
+      color: var(--ink);
+      margin: 0 0 6px;
+    }
+
+    .pin-desc {
+      font-size: 13px;
+      color: var(--muted);
+      margin: 0 0 16px;
+      line-height: 1.4;
+    }
+
+    .pin-input-wrap {
+      width: 100%;
+      margin-bottom: 12px;
+    }
+
+    .pin-field {
+      width: 100%;
+      padding: 10px 14px;
+      border-radius: 12px;
+      border: 1.5px solid var(--border);
+      background-color: var(--input);
+      color: var(--ink);
+      font-size: 14px;
+      outline: none;
+      box-sizing: border-box;
+
+      &:focus {
+        border-color: var(--amber);
+        box-shadow: 0 0 0 3px rgba(232, 162, 61, 0.2);
+      }
+    }
+
+    .pin-error {
+      font-size: 12px;
+      color: var(--danger);
+      margin: 0 0 12px;
+      font-weight: 600;
+    }
+
+    .pin-actions {
+      display: flex;
+      gap: 10px;
+      width: 100%;
+      margin-top: 6px;
+
+      button {
+        flex: 1;
+        padding: 10px 14px;
+        border-radius: 999px;
+        font-size: 13px;
+        font-weight: 700;
+        cursor: pointer;
+        border: none;
+        transition: transform 0.15s ease, background-color 0.15s ease;
+      }
+
+      .btn-ghost {
+        background-color: var(--input);
+        color: var(--ink);
+        &:hover { background-color: var(--hover); }
+      }
+
+      .btn-primary {
+        background-color: var(--amber);
+        color: var(--on-amber);
+        &:hover {
+          transform: translateY(-1px);
+          box-shadow: 0 3px 10px rgba(232, 162, 61, 0.3);
+        }
+      }
     }
   `],
 })
@@ -1039,6 +1421,7 @@ export class ChatDetailComponent implements OnDestroy {
   private readonly socketService = inject(SocketService);
   private readonly authService = inject(AuthService);
   private readonly toast = inject(ToastService);
+  readonly chatLockService = inject(ChatLockService);
 
   @ViewChild('messageContainer') messageContainer!: ElementRef<HTMLDivElement>;
   @ViewChild('textInput') textInputRef!: ElementRef<HTMLInputElement>;
@@ -1059,6 +1442,26 @@ export class ChatDetailComponent implements OnDestroy {
 
   readonly chat = signal<ChatItem | null>(null);
   readonly messages = signal<ChatMessage[]>([]);
+
+  readonly unlockPinInput = signal<string>('');
+  readonly unlockPinError = signal<string>('');
+  readonly forgotPinModalOpen = signal<boolean>(false);
+  resetPasswordInput = '';
+  resetNewPinInput = '';
+  resetConfirmPinInput = '';
+  readonly resetPinError = signal<string>('');
+  private expirationInterval: any = null;
+
+  readonly isAcceptedChat = computed(() => {
+    const c = this.chat();
+    return !!c && c.rawStatus === 'accepted' && !c.isSelfNotes;
+  });
+
+  readonly isChatLockedAndProtected = computed(() => {
+    const c = this.chat();
+    if (!c || !c.isLocked) return false;
+    return !this.chatLockService.isUnlocked(this.chatId());
+  });
 
   readonly senderComposerNote = computed(() => {
     const c = this.chat();
@@ -1102,6 +1505,7 @@ export class ChatDetailComponent implements OnDestroy {
   });
 
   readonly isTypingDisabled = computed(() => {
+    if (this.isChatLockedAndProtected()) return true;
     const c = this.chat();
     if (!c) {
       return !this.chatId().startsWith('new-');
@@ -1179,6 +1583,15 @@ export class ChatDetailComponent implements OnDestroy {
 
     this.setupSocketListeners();
     document.addEventListener('visibilitychange', this.onVisibilityChange);
+
+    this.expirationInterval = setInterval(() => {
+      const now = Date.now();
+      this.messages.update((list) => {
+        const hasExpired = list.some((m) => m.expiresAt && new Date(m.expiresAt).getTime() <= now);
+        if (!hasExpired) return list;
+        return list.filter((m) => !m.expiresAt || new Date(m.expiresAt).getTime() > now);
+      });
+    }, 5000);
   }
 
   private onVisibilityChange = () => {
@@ -1188,6 +1601,10 @@ export class ChatDetailComponent implements OnDestroy {
     } else {
       if (id) {
         this.conversationsService.activeConversationId.set(id);
+        if (this.chat()?.isLocked && !this.chatLockService.isUnlocked(id)) {
+          this.messages.set([]);
+          return;
+        }
         if (!id.startsWith('new-')) {
           this.messagesService.markSeen(id).subscribe();
           this.socketService.markRead(id);
@@ -1258,7 +1675,15 @@ export class ChatDetailComponent implements OnDestroy {
     // Load conversation metadata
     this.conversationsService.getConversationById(id).subscribe({
       next: (conv) => {
-        this.chat.set(formatConversationToChatItem(conv, myId, myAvatar));
+        const item = formatConversationToChatItem(conv, myId, myAvatar);
+        this.chat.set(item);
+
+        if (item.isLocked && !this.chatLockService.isUnlocked(id)) {
+          this.messages.set([]);
+          return;
+        }
+
+        this.fetchMessages(id);
       },
       error: (err: HttpErrorResponse) => {
         if (err?.status === 404) {
@@ -1270,8 +1695,10 @@ export class ChatDetailComponent implements OnDestroy {
         }
       },
     });
+  }
 
-    // Load messages
+  fetchMessages(id: string): void {
+    const myId = this.authService.currentUser()?.id;
     this.messagesService.getMessages(id).subscribe({
       next: (res) => {
         const msgs = res.messages.map((m) => formatMessageToChatMessage(m, myId));
@@ -1282,6 +1709,11 @@ export class ChatDetailComponent implements OnDestroy {
         this.messagesService.markSeen(id).subscribe();
       },
       error: (err: HttpErrorResponse) => {
+        if (err?.status === 403 && (err?.error?.error?.code === 'CHAT_LOCKED' || err?.error?.code === 'CHAT_LOCKED')) {
+          this.chat.update((c) => (c ? { ...c, isLocked: true } : c));
+          this.messages.set([]);
+          return;
+        }
         if (err?.status !== 404 && !this.chat()) {
           this.loadError.set('error');
         }
@@ -1505,7 +1937,17 @@ export class ChatDetailComponent implements OnDestroy {
       })
     );
 
-    // 8. Reconnect catch-up sync
+    // 8. Real-time message expiration
+    this.subscriptions.push(
+      this.socketService.messageExpired$.subscribe((data) => {
+        if (data.conversationId === this.chatId()) {
+          const expiredSet = new Set(data.messageIds);
+          this.messages.update((list) => list.filter((m) => !expiredSet.has(m.id)));
+        }
+      })
+    );
+
+    // 9. Reconnect catch-up sync
     this.subscriptions.push(
       this.socketService.reconnected$.subscribe(() => {
         const id = this.chatId();
@@ -1730,6 +2172,7 @@ export class ChatDetailComponent implements OnDestroy {
       inputEl.setSelectionRange?.(newPos, newPos);
     }
 
+    this.onInputChange();
     this.scrollToBottom();
   }
 
@@ -2098,6 +2541,101 @@ export class ChatDetailComponent implements OnDestroy {
     setTimeout(scroll, 50);
   }
 
+  onHeaderUserClick(): void {
+    if (this.isAcceptedChat()) {
+      this.router.navigate(['/chats', this.chatId(), 'info']);
+    }
+  }
+
+  viewProfile(): void {
+    this.headerMenuOpen.set(false);
+    if (this.isAcceptedChat()) {
+      this.router.navigate(['/chats', this.chatId(), 'info']);
+    }
+  }
+
+  submitDetailUnlock(): void {
+    const pin = this.unlockPinInput().trim();
+    if (!/^\d{4}$/.test(pin)) {
+      this.unlockPinError.set('Please enter a 4-digit PIN');
+      return;
+    }
+    this.unlockPinError.set('');
+    this.chatLockService.verifyPin(pin, this.chat()?.otherUserId, this.chatId()).subscribe({
+      next: () => {
+        this.unlockPinInput.set('');
+        this.unlockPinError.set('');
+        this.fetchMessages(this.chatId());
+      },
+      error: (err) => {
+        if (err?.status === 429) {
+          this.unlockPinError.set('Too many incorrect attempts. Locked for 5 minutes.');
+        } else {
+          this.unlockPinError.set('Incorrect PIN. Please try again.');
+        }
+      },
+    });
+  }
+
+  openForgotPinModal(): void {
+    this.resetPasswordInput = '';
+    this.resetNewPinInput = '';
+    this.resetConfirmPinInput = '';
+    this.resetPinError.set('');
+    this.forgotPinModalOpen.set(true);
+  }
+
+  closeForgotPinModal(): void {
+    this.forgotPinModalOpen.set(false);
+    this.resetPasswordInput = '';
+    this.resetNewPinInput = '';
+    this.resetConfirmPinInput = '';
+    this.resetPinError.set('');
+  }
+
+  isGoogleUser(): boolean {
+    const user = this.authService.currentUser();
+    return user?.authProvider === 'google' || user?.hasPassword === false;
+  }
+
+  submitResetPin(): void {
+    const newPin = this.resetNewPinInput.trim();
+    if (!/^\d{4}$/.test(newPin)) {
+      this.resetPinError.set('New PIN must be exactly 4 digits');
+      return;
+    }
+    if (newPin !== this.resetConfirmPinInput.trim()) {
+      this.resetPinError.set('PIN confirmation does not match');
+      return;
+    }
+
+    const isGoogle = this.isGoogleUser();
+    if (!isGoogle && !this.resetPasswordInput.trim()) {
+      this.resetPinError.set('Please enter your account password');
+      return;
+    }
+
+    const payload: { newPin: string; password?: string } = {
+      newPin,
+      ...(isGoogle ? {} : { password: this.resetPasswordInput }),
+    };
+
+    this.chatLockService.resetPin(payload).subscribe({
+      next: () => {
+        this.toast.success('PIN reset successfully');
+        this.closeForgotPinModal();
+        this.chatLockService.verifyPin(newPin, this.chat()?.otherUserId, this.chatId()).subscribe({
+          next: () => {
+            this.fetchMessages(this.chatId());
+          },
+        });
+      },
+      error: (err) => {
+        this.resetPinError.set(err?.error?.error?.message || 'Failed to reset PIN');
+      },
+    });
+  }
+
   ngOnDestroy(): void {
     document.removeEventListener('visibilitychange', this.onVisibilityChange);
     this.conversationsService.activeConversationId.set(null);
@@ -2106,6 +2644,10 @@ export class ChatDetailComponent implements OnDestroy {
     if (this.typingStopTimer) {
       clearTimeout(this.typingStopTimer);
       this.typingStopTimer = null;
+    }
+    if (this.expirationInterval) {
+      clearInterval(this.expirationInterval);
+      this.expirationInterval = null;
     }
   }
 }

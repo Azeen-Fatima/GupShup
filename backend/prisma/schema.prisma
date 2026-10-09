@@ -18,6 +18,7 @@ model User {
   bio             String?
   statusMessage   String?
   themePreference String    @default("system")
+  chatLockPinHash String?
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
@@ -28,6 +29,8 @@ model User {
   messagesSent           Message[]
   blocksInitiated        Block[]          @relation("Blocker")
   blocksReceived         Block[]          @relation("Blocked")
+  chatLocks              ChatLock[]       @relation("UserChatLocks")
+  lockedByPeers          ChatLock[]       @relation("PeerChatLocks")
   refreshTokens          RefreshToken[]
 
   @@index([email])
@@ -35,18 +38,19 @@ model User {
 }
 
 model Conversation {
-  id            String    @id @default(uuid())
-  userAId       String
-  userBId       String
-  requesterId   String
-  status        String    @default("pending") // pending | accepted | declined | blocked
-  declineCount  Int       @default(0)
-  declinedAt    DateTime?
-  blockedAt     DateTime?
-  blockedById   String?
-  wasAccepted   Boolean   @default(false)
-  createdAt     DateTime  @default(now())
-  lastMessageAt DateTime?
+  id               String    @id @default(uuid())
+  userAId          String
+  userBId          String
+  requesterId      String
+  status           String    @default("pending") // pending | accepted | declined | blocked
+  declineCount     Int       @default(0)
+  declinedAt       DateTime?
+  blockedAt        DateTime?
+  blockedById      String?
+  wasAccepted      Boolean   @default(false)
+  disappearingMode String    @default("off") // off | 24h | 7d
+  createdAt        DateTime  @default(now())
+  lastMessageAt    DateTime?
 
   userA     User                 @relation("ConversationUserA", fields: [userAId], references: [id], onDelete: Cascade)
   userB     User                 @relation("ConversationUserB", fields: [userBId], references: [id], onDelete: Cascade)
@@ -80,13 +84,14 @@ model Message {
   id             String    @id @default(uuid())
   conversationId String
   senderId       String
-  type           String    @default("text") // text | image | file
+  type           String    @default("text") // text | image | file | system
   body           String?
   attachmentUrl  String?
   attachmentName String?
   attachmentSize String?
   attachmentMime String?
   clientId       String?
+  expiresAt      DateTime?
   createdAt      DateTime  @default(now())
   deliveredAt    DateTime?
   seenAt         DateTime?
@@ -96,6 +101,7 @@ model Message {
 
   @@index([conversationId, createdAt])
   @@index([senderId])
+  @@index([expiresAt])
 }
 
 model Block {
@@ -110,6 +116,20 @@ model Block {
   @@unique([blockerId, blockedId])
   @@index([blockerId])
   @@index([blockedId])
+}
+
+model ChatLock {
+  id         String   @id @default(uuid())
+  userId     String
+  peerUserId String
+  createdAt  DateTime @default(now())
+
+  user     User @relation("UserChatLocks", fields: [userId], references: [id], onDelete: Cascade)
+  peerUser User @relation("PeerChatLocks", fields: [peerUserId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, peerUserId])
+  @@index([userId])
+  @@index([peerUserId])
 }
 
 model RefreshToken {

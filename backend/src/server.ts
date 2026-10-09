@@ -6,6 +6,7 @@ import { initSocketServer } from './sockets';
 import { prisma } from './db/prisma';
 import { redis } from './redis/client';
 import { logActiveEmailProvider } from './utils/mailer';
+import { startMessageCleanupJob, stopMessageCleanupJob } from './services/messageCleanup.service';
 
 const server = http.createServer(app);
 
@@ -14,6 +15,9 @@ initSocketServer(server);
 
 // Log active email provider at startup
 logActiveEmailProvider();
+
+// Start periodic cleanup of expired disappearing messages
+startMessageCleanupJob();
 
 // Resolve final port (default to 3000, never listen on 0)
 const finalPort = env.PORT > 0 ? env.PORT : 3000;
@@ -32,6 +36,7 @@ async function handleShutdown(signal: string) {
   if (isShuttingDown) return;
   isShuttingDown = true;
   logger.info(`Received ${signal}. Gracefully shutting down...`);
+  stopMessageCleanupJob();
 
   // Force close after 10 seconds if graceful shutdown takes too long
   const forceExitTimer = setTimeout(() => {

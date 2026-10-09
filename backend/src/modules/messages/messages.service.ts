@@ -2,6 +2,8 @@ import { prisma } from '../../db/prisma';
 import { ForbiddenError, NotFoundError } from '../../utils/errors';
 import { emitToUser } from '../../sockets';
 import { SendMessageInput, GetMessagesQueryInput } from './messages.schemas';
+import { chatLockService } from '../chatLock/chatLock.service';
+import { verifyUnlockToken } from '../../utils/token';
 
 export class MessagesService {
   /**
@@ -10,7 +12,8 @@ export class MessagesService {
   async getConversationMessages(
     conversationId: string,
     userId: string,
-    query: GetMessagesQueryInput
+    query: GetMessagesQueryInput,
+    unlockToken?: string
   ) {
     const member = await prisma.conversationMember.findUnique({
       where: {
@@ -22,9 +25,31 @@ export class MessagesService {
       throw new ForbiddenError('You are not a member of this conversation', 'NOT_A_MEMBER');
     }
 
+    const conv = await prisma.conversation.findUnique({
+      where: { id: conversationId },
+      select: { userAId: true, userBId: true },
+    });
+
+    if (conv) {
+      const peerUserId = conv.userAId === userId ? conv.userBId : conv.userAId;
+      if (peerUserId !== userId) {
+        const isLocked = await chatLockService.isPeerLocked(userId, peerUserId);
+        if (isLocked) {
+          if (!unlockToken || !verifyUnlockToken(unlockToken, userId, peerUserId)) {
+            throw new ForbiddenError('Chat is locked. PIN verification required.', 'CHAT_LOCKED');
+          }
+        }
+      }
+    }
+
     const limit = Math.min(query.limit || 30, 50);
     const whereClause: any = {
       conversationId,
+      AND: [
+        {
+          OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
+        },
+      ],
     };
 
     if (member.clearedAt) {
@@ -260,6 +285,13 @@ export class MessagesService {
       }
     }
 
+    let expiresAt: Date | null = null;
+    if (conv.disappearingMode === '24h') {
+      expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    } else if (conv.disappearingMode === '7d') {
+      expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+    }
+
     const message = await prisma.message.create({
       data: {
         conversationId,
@@ -271,6 +303,7 @@ export class MessagesService {
         attachmentSize: input.attachmentSize || null,
         attachmentMime: input.attachmentMime || null,
         clientId: input.clientId || null,
+        expiresAt,
       },
       include: {
         sender: {
@@ -297,10 +330,32 @@ export class MessagesService {
     ]);
 
     // Emit socket event to recipient and sender
-    emitToUser(otherUserId, 'message:new', {
-      conversationId,
-      message,
-    });
+    const otherLockedMe =
+      otherUserId !== userId ? await chatLockService.isPeerLocked(otherUserId, userId) : false;
+
+    if (otherLockedMe) {
+      emitToUser(otherUserId, 'message:new', {
+        conversationId,
+        isLocked: true,
+        message: {
+          id: message.id,
+          conversationId,
+          senderId: userId,
+          type: 'text',
+          body: 'Locked chat',
+          createdAt: message.createdAt,
+          sender: message.sender,
+          isMasked: true,
+        },
+      });
+    } else {
+      emitToUser(otherUserId, 'message:new', {
+        conversationId,
+        message,
+      });
+    }
+
+    emitToUser(otherUserId, 'conversation:updated', { conversationId });
 
     if (otherUserId !== userId) {
       emitToUser(userId, 'message:new', {

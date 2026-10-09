@@ -4,6 +4,8 @@ import { Observable, map } from 'rxjs';
 import { environment } from '../../../environments/environment';
 import { ApiResponse, Message } from '../models/api.models';
 
+import { ChatLockService } from './chat-lock.service';
+
 export interface GetMessagesResult {
   messages: Message[];
   nextCursor: string | null;
@@ -22,6 +24,7 @@ export interface UploadAttachmentResult {
 })
 export class MessagesService {
   private readonly http = inject(HttpClient);
+  private readonly chatLockService = inject(ChatLockService);
   private readonly baseUrl = `${environment.apiUrl}/conversations`;
 
   /**
@@ -37,8 +40,14 @@ export class MessagesService {
       url += `&cursor=${encodeURIComponent(cursor)}`;
     }
 
+    const unlockToken = this.chatLockService.getUnlockToken(conversationId);
+    const headers: Record<string, string> = {};
+    if (unlockToken) {
+      headers['X-Unlock-Token'] = unlockToken;
+    }
+
     return this.http
-      .get<ApiResponse<GetMessagesResult>>(url)
+      .get<ApiResponse<GetMessagesResult>>(url, { headers })
       .pipe(map((res) => res.data!));
   }
 

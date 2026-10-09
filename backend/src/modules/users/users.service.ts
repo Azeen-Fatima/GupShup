@@ -200,12 +200,16 @@ export class UsersService {
       select: { blockerId: true, blockedId: true },
     });
 
-    // Find all existing conversations involving currentUserId in any status
+    // Find all existing conversations involving currentUserId
     const conversations = await prisma.conversation.findMany({
       where: {
         OR: [{ userAId: currentUserId }, { userBId: currentUserId }],
       },
-      select: { userAId: true, userBId: true },
+      include: {
+        members: {
+          where: { userId: currentUserId },
+        },
+      },
     });
 
     const excludedUserIds = new Set<string>();
@@ -214,9 +218,25 @@ export class UsersService {
       if (b.blockerId === currentUserId) excludedUserIds.add(b.blockedId);
       if (b.blockedId === currentUserId) excludedUserIds.add(b.blockerId);
     }
+
+    const hiddenAcceptedConvMap = new Map<string, string>(); // peerUserId -> convId
+
     for (const c of conversations) {
-      if (c.userAId === currentUserId) excludedUserIds.add(c.userBId);
-      if (c.userBId === currentUserId) excludedUserIds.add(c.userAId);
+      const otherUserId = c.userAId === currentUserId ? c.userBId : c.userAId;
+      if (otherUserId === currentUserId) {
+        // Notes to self
+        excludedUserIds.add(currentUserId);
+        continue;
+      }
+
+      const myMember = c.members[0];
+      // If conversation is accepted AND soft-deleted (hidden by current user)
+      if (c.status === 'accepted' && myMember?.hiddenAt) {
+        hiddenAcceptedConvMap.set(otherUserId, c.id);
+      } else {
+        // Exclude all other existing conversations (pending, declined, blocked, or visible accepted)
+        excludedUserIds.add(otherUserId);
+      }
     }
 
     // Find up to 30 matching users
@@ -241,8 +261,8 @@ export class UsersService {
 
     return users.map((target) => ({
       ...target,
-      relationshipStatus: 'none' as RelationshipStatus,
-      conversationId: undefined,
+      relationshipStatus: (hiddenAcceptedConvMap.has(target.id) ? 'accepted' : 'none') as RelationshipStatus,
+      conversationId: hiddenAcceptedConvMap.get(target.id),
     }));
   }
 

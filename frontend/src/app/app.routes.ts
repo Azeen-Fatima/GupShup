@@ -38,6 +38,15 @@ export const routes: Routes = [
     title: 'Chats · Gupshup',
   },
   {
+    path: 'chats/:id/info',
+    loadComponent: () =>
+      import('./features/chats/contact-info/contact-info.component').then(
+        (m) => m.ContactInfoComponent
+      ),
+    canActivate: [authGuard],
+    title: 'Contact Info · Gupshup',
+  },
+  {
     path: 'chats/:id',
     loadComponent: () =>
       import('./features/chats/chat-detail/chat-detail.component').then((m) => m.ChatDetailComponent),

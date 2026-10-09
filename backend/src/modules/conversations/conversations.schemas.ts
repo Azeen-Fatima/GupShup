@@ -27,4 +27,9 @@ export const conversationIdParamSchema = z.object({
   id: z.string().uuid('Invalid conversation ID'),
 });
 
+export const setDisappearingModeSchema = z.object({
+  mode: z.enum(['off', '24h', '7d']),
+});
+
 export type CreateConversationInput = z.infer<typeof createConversationSchema>;
+export type SetDisappearingModeInput = z.infer<typeof setDisappearingModeSchema>;

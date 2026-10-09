@@ -7,6 +7,7 @@ import { UsersService } from '../../../shared/services/users.service';
 import { AuthService } from '../../../shared/services/auth.service';
 import { SocketService } from '../../../shared/services/socket.service';
 import { ToastService } from '../../../shared/services/toast.service';
+import { ChatLockService } from '../../../shared/services/chat-lock.service';
 import {
   formatConversationToChatItem,
   getInitials,
@@ -125,6 +126,7 @@ import { EmptyStateComponent } from '../../../shared/components/empty-state/empt
                   <app-chat-row
                     [chat]="chat"
                     (rowClicked)="openChat(chat)"
+                    (avatarClicked)="openContactInfo(chat)"
                     (actionTriggered)="onRowAction($event)"
                   ></app-chat-row>
                 }
@@ -144,6 +146,7 @@ import { EmptyStateComponent } from '../../../shared/components/empty-state/empt
               <app-chat-row
                 [chat]="chat"
                 (rowClicked)="openChat(chat)"
+                (avatarClicked)="openContactInfo(chat)"
                 (actionTriggered)="onRowAction($event)"
               ></app-chat-row>
             }
@@ -235,6 +238,39 @@ import { EmptyStateComponent } from '../../../shared/components/empty-state/empt
       >
         <p>{{ modalState().message }}</p>
       </app-modal>
+
+      <!-- Unlock PIN Modal -->
+      @if (lockModalChat()) {
+        <div class="pin-modal-backdrop" (click)="closeLockModal()" role="presentation">
+          <div class="pin-modal-card" (click)="$event.stopPropagation()">
+            <div class="pin-icon-wrap">
+              <app-svg-icon name="lock" [size]="28"></app-svg-icon>
+            </div>
+            <h3 class="pin-title">Unlock Chat</h3>
+            <p class="pin-desc">Enter your 4-digit PIN to view chat with {{ lockModalChat()?.name }}.</p>
+            <div class="pin-input-wrap">
+              <input
+                type="password"
+                inputmode="numeric"
+                pattern="[0-9]*"
+                maxlength="4"
+                [(ngModel)]="pinInput"
+                placeholder="••••"
+                class="pin-field"
+                autofocus
+                (keydown.enter)="submitUnlockPin()"
+              />
+            </div>
+            @if (pinError()) {
+              <p class="pin-error">{{ pinError() }}</p>
+            }
+            <div class="pin-actions">
+              <app-button variant="ghost" (clicked)="closeLockModal()">Cancel</app-button>
+              <app-button variant="primary" (clicked)="submitUnlockPin()">Unlock</app-button>
+            </div>
+          </div>
+        </div>
+      }
     </div>
   `,
   styles: [`
@@ -538,6 +574,97 @@ import { EmptyStateComponent } from '../../../shared/components/empty-state/empt
       color: var(--muted);
       margin-top: 1px;
     }
+
+    .pin-modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background-color: rgba(0, 0, 0, 0.55);
+      backdrop-filter: blur(2px);
+      z-index: 120;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+
+    .pin-modal-card {
+      background-color: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 24px;
+      width: 100%;
+      max-width: 360px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+      box-shadow: 0 12px 36px rgba(0, 0, 0, 0.15);
+    }
+
+    .pin-icon-wrap {
+      width: 52px;
+      height: 52px;
+      border-radius: 50%;
+      background-color: rgba(245, 158, 11, 0.12);
+      color: var(--amber);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 12px;
+    }
+
+    .pin-title {
+      font-size: 17px;
+      font-weight: 800;
+      color: var(--ink);
+      margin: 0 0 6px;
+    }
+
+    .pin-desc {
+      font-size: 13px;
+      color: var(--muted);
+      margin: 0 0 16px;
+      line-height: 1.4;
+    }
+
+    .pin-input-wrap {
+      width: 100%;
+      margin-bottom: 10px;
+    }
+
+    .pin-field {
+      width: 100%;
+      padding: 12px;
+      text-align: center;
+      font-size: 24px;
+      letter-spacing: 0.3em;
+      border-radius: 12px;
+      border: 1.5px solid var(--border);
+      background-color: var(--input);
+      color: var(--ink);
+      font-family: monospace;
+      outline: none;
+
+      &:focus {
+        border-color: var(--amber);
+      }
+    }
+
+    .pin-error {
+      color: var(--danger);
+      font-size: 12.5px;
+      margin: 4px 0 12px;
+      font-weight: 600;
+    }
+
+    .pin-actions {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 10px;
+      width: 100%;
+      margin-top: 10px;
+    }
   `],
 })
 export class ChatListComponent implements OnInit {
@@ -545,6 +672,7 @@ export class ChatListComponent implements OnInit {
   private readonly usersService = inject(UsersService);
   private readonly authService = inject(AuthService);
   private readonly socketService = inject(SocketService);
+  private readonly chatLockService = inject(ChatLockService);
   private readonly router = inject(Router);
   private readonly toast = inject(ToastService);
 
@@ -556,6 +684,10 @@ export class ChatListComponent implements OnInit {
   readonly isLoadingSheet = signal<boolean>(false);
   readonly sheetUsers = signal<SearchUserResult[]>([]);
   private sheetSearchTimer: any = null;
+
+  readonly lockModalChat = signal<ChatItem | null>(null);
+  pinInput = '';
+  readonly pinError = signal<string>('');
 
   // Current logged in user computed from authService
   readonly currentUser = computed(() => {
@@ -682,7 +814,47 @@ export class ChatListComponent implements OnInit {
   }
 
   openChat(chat: ChatItem): void {
+    if (chat.isLocked && !this.chatLockService.isUnlocked(chat.id)) {
+      this.pinInput = '';
+      this.pinError.set('');
+      this.lockModalChat.set(chat);
+      return;
+    }
     this.router.navigate(['/chats', chat.id]);
+  }
+
+  closeLockModal(): void {
+    this.lockModalChat.set(null);
+    this.pinInput = '';
+    this.pinError.set('');
+  }
+
+  submitUnlockPin(): void {
+    const chat = this.lockModalChat();
+    if (!chat) return;
+    const pin = this.pinInput.trim();
+    if (!/^\d{4}$/.test(pin)) {
+      this.pinError.set('PIN must be 4 digits');
+      return;
+    }
+
+    this.chatLockService.verifyPin(pin, chat.otherUserId, chat.id).subscribe({
+      next: () => {
+        this.closeLockModal();
+        this.router.navigate(['/chats', chat.id]);
+      },
+      error: (err) => {
+        if (err?.status === 429) {
+          this.pinError.set('Too many incorrect attempts. Locked for 5 minutes.');
+        } else {
+          this.pinError.set(err?.error?.error?.message || 'Incorrect PIN');
+        }
+      },
+    });
+  }
+
+  openContactInfo(chat: ChatItem): void {
+    this.router.navigate(['/chats', chat.id, 'info']);
   }
 
   messagePerson(person: SearchUserResult): void {
@@ -696,8 +868,13 @@ export class ChatListComponent implements OnInit {
     }
   }
 
-  onRowAction(event: { action: 'delete' | 'block' | 'clear' | 'unblock'; chat: ChatItem }): void {
+  onRowAction(event: { action: 'delete' | 'block' | 'clear' | 'unblock' | 'view_profile'; chat: ChatItem }): void {
     const { action, chat } = event;
+
+    if (action === 'view_profile') {
+      this.openContactInfo(chat);
+      return;
+    }
 
     if (action === 'delete') {
       this.modalState.set({

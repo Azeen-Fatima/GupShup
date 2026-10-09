@@ -15,11 +15,19 @@ import { ChatMessage } from '../../mock/mock-data';
       </div>
     }
 
-    <div
-      class="bubble-row"
-      [class.me]="message().sender === 'me'"
-      [class.them]="message().sender === 'them'"
-    >
+    @if (message().type === 'system') {
+      <div class="system-message-row">
+        <div class="system-message-chip">
+          <app-svg-icon name="clock" [size]="13"></app-svg-icon>
+          <span>{{ message().text }}</span>
+        </div>
+      </div>
+    } @else {
+      <div
+        class="bubble-row"
+        [class.me]="message().sender === 'me'"
+        [class.them]="message().sender === 'them'"
+      >
       <div class="bubble" [class.has-image]="message().attachment?.type === 'image'">
         <!-- Image Attachment -->
         @if (message().attachment?.type === 'image') {
@@ -98,11 +106,36 @@ import { ChatMessage } from '../../mock/mock-data';
         }
       </div>
     </div>
+    }
   `,
   styles: [`
     :host {
       display: block;
       width: 100%;
+    }
+
+    .system-message-row {
+      display: flex;
+      justify-content: center;
+      margin: 10px 0;
+      width: 100%;
+    }
+
+    .system-message-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 14px;
+      background: var(--input);
+      color: var(--muted);
+      border-radius: 999px;
+      font-size: 11.5px;
+      font-weight: 500;
+      border: 1px solid var(--border);
+      text-align: center;
+      max-width: 88%;
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+      user-select: none;
     }
 
     .unread-divider {

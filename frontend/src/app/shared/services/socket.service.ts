@@ -75,6 +75,7 @@ export class SocketService implements OnDestroy {
   readonly requestNew$ = new Subject<{ conversationId: string; [key: string]: any }>();
   readonly requestAccepted$ = new Subject<{ conversationId: string; [key: string]: any }>();
   readonly requestDeclined$ = new Subject<{ conversationId: string; [key: string]: any }>();
+  readonly messageExpired$ = new Subject<{ conversationId: string; messageIds: string[] }>();
   readonly reconnected$ = new Subject<void>();
 
   constructor() {
@@ -191,6 +192,11 @@ export class SocketService implements OnDestroy {
     this.socket.on('request:declined', (data: any) => {
       this.requestDeclined$.next(data);
       this.conversationsService.loadConversations().subscribe();
+    });
+
+    this.socket.on('message:expired', (data: { conversationId: string; messageIds: string[] }) => {
+      this.conversationsService.handleMessageExpired(data.conversationId, data.messageIds);
+      this.messageExpired$.next(data);
     });
 
     this.socket.on('user:updated', (data: UserUpdatedPayload) => {

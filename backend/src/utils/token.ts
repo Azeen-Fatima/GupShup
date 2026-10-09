@@ -72,3 +72,30 @@ export function verifyTempToken(token: string, expectedPurpose: 'signup' | 'forg
 export function hashToken(token: string): string {
   return crypto.createHash('sha256').update(token).digest('hex');
 }
+
+export interface UnlockTokenPayload {
+  userId: string;
+  peerUserId?: string;
+  purpose: 'chat_unlock';
+}
+
+export function generateUnlockToken(payload: { userId: string; peerUserId?: string }): string {
+  return jwt.sign({ ...payload, purpose: 'chat_unlock' }, env.JWT_ACCESS_SECRET, {
+    expiresIn: '5m',
+  });
+}
+
+export function verifyUnlockToken(token: string, expectedUserId: string, expectedPeerUserId?: string): boolean {
+  try {
+    const decoded = jwt.verify(token, env.JWT_ACCESS_SECRET) as UnlockTokenPayload;
+    if (decoded.purpose !== 'chat_unlock' || decoded.userId !== expectedUserId) {
+      return false;
+    }
+    if (expectedPeerUserId && decoded.peerUserId && decoded.peerUserId !== expectedPeerUserId) {
+      return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}

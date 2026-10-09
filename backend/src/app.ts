@@ -15,6 +15,7 @@ import authRouter from './modules/auth/auth.routes';
 import usersRouter from './modules/users/users.routes';
 import conversationsRouter from './modules/conversations/conversations.routes';
 import uploadsRouter from './modules/uploads/uploads.routes';
+import chatLockRouter from './modules/chatLock/chatLock.routes';
 
 const app = express();
 
@@ -43,7 +44,7 @@ app.use(
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-Unlock-Token', 'x-unlock-token'],
   })
 );
 
@@ -112,6 +113,7 @@ app.use('/api/v1/auth', authRouter);
 app.use('/api/v1/users', usersRouter);
 app.use('/api/v1/conversations', conversationsRouter);
 app.use('/api/v1/uploads', uploadsRouter);
+app.use('/api/v1/chat-lock', chatLockRouter);
 
 // 404 handler
 app.use((req: Request, _res: Response, next: NextFunction) => {

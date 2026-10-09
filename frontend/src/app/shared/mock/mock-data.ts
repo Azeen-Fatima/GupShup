@@ -30,6 +30,9 @@ export interface ChatMessage {
   status?: 'sent' | 'delivered' | 'seen' | 'read' | 'pending' | 'failed';
   attachment?: MessageAttachment;
   isFirstUnread?: boolean;
+  type?: 'text' | 'image' | 'file' | 'system';
+  expiresAt?: string | null;
+  isMasked?: boolean;
 }
 
 export interface ChatItem {
@@ -48,6 +51,8 @@ export interface ChatItem {
   isPendingRequest?: boolean;   // Sender side (waiting for recipient to accept)
   isIncomingRequest?: boolean;  // Receiver side (X wants to message you)
   isSelfNotes?: boolean;
+  isLocked?: boolean;
+  disappearingMode?: 'off' | '24h' | '7d';
   photoUrl?: string | null;
   declineCount?: number;
   declinedAt?: string | null;

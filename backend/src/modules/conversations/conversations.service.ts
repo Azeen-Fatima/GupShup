@@ -7,6 +7,7 @@ import {
 import { presenceService } from '../presence/presence.service';
 import { emitToUser } from '../../sockets';
 import { CreateConversationInput } from './conversations.schemas';
+import { chatLockService } from '../chatLock/chatLock.service';
 
 export class ConversationsService {
   /**
@@ -45,6 +46,9 @@ export class ConversationsService {
               },
             },
             messages: {
+              where: {
+                OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
+              },
               orderBy: { createdAt: 'desc' },
               take: 5,
             },
@@ -90,11 +94,19 @@ export class ConversationsService {
     // Fetch online statuses
     const onlineMap = await presenceService.getOnlineStatuses(otherUserIds);
 
+    // Fetch chat locks for current user
+    const userLocks = await prisma.chatLock.findMany({
+      where: { userId },
+      select: { peerUserId: true },
+    });
+    const lockedPeerSet = new Set(userLocks.map((l) => l.peerUserId));
+
     const result = await Promise.all(
       visibleMembers.map(async (m) => {
         const conv = m.conversation;
         const isSelf = conv.userAId === conv.userBId;
         const otherUser = isSelf ? conv.userA : conv.userAId === userId ? conv.userB : conv.userA;
+        const isLocked = !isSelf && lockedPeerSet.has(otherUser.id);
 
         const isBlockedByMe =
           blocks.some((b) => b.blockerId === userId && b.blockedId === otherUser.id) ||
@@ -177,6 +189,8 @@ export class ConversationsService {
             isSelf,
             isBlockedByMe: false,
             isBlockedByThem: effectiveBlockedByThem,
+            isLocked,
+            disappearingMode: conv.disappearingMode || 'off',
             declineCount: conv.declineCount,
             declinedAt: conv.declinedAt,
             canSendExtraMessage,
@@ -188,17 +202,30 @@ export class ConversationsService {
               lastSeen,
             },
             lastMessage: lastMessage
-              ? {
-                  id: lastMessage.id,
-                  body: lastMessage.body,
-                  type: lastMessage.type,
-                  senderId: lastMessage.senderId,
-                  createdAt: lastMessage.createdAt,
-                  deliveredAt: lastMessage.deliveredAt,
-                  seenAt: lastMessage.seenAt,
-                  attachmentUrl: lastMessage.attachmentUrl,
-                  clientId: lastMessage.clientId,
-                }
+              ? isLocked
+                ? {
+                    id: lastMessage.id,
+                    body: 'Locked chat',
+                    type: 'text',
+                    senderId: lastMessage.senderId,
+                    createdAt: lastMessage.createdAt,
+                    deliveredAt: lastMessage.deliveredAt,
+                    seenAt: lastMessage.seenAt,
+                    attachmentUrl: null,
+                    clientId: null,
+                    isMasked: true,
+                  }
+                : {
+                    id: lastMessage.id,
+                    body: lastMessage.body,
+                    type: lastMessage.type,
+                    senderId: lastMessage.senderId,
+                    createdAt: lastMessage.createdAt,
+                    deliveredAt: lastMessage.deliveredAt,
+                    seenAt: lastMessage.seenAt,
+                    attachmentUrl: lastMessage.attachmentUrl,
+                    clientId: lastMessage.clientId,
+                  }
               : null,
             unreadCount,
           };
@@ -321,6 +348,7 @@ export class ConversationsService {
     const showPresence = isSelf || conv.status === 'accepted';
     const isOnline = showPresence ? (isSelf ? true : await presenceService.isOnline(otherUser.id)) : false;
     const lastSeen = showPresence && !isSelf ? await presenceService.getLastSeen(otherUser.id) : null;
+    const isLocked = !isSelf && (await chatLockService.isPeerLocked(userId, otherUser.id));
 
     return {
       id: conv.id,
@@ -330,6 +358,8 @@ export class ConversationsService {
       isSelf,
       isBlockedByMe,
       isBlockedByThem: effectiveBlockedByThem,
+      isLocked,
+      disappearingMode: conv.disappearingMode || 'off',
       declineCount: conv.declineCount,
       declinedAt: conv.declinedAt,
       canSendExtraMessage,
@@ -584,6 +614,18 @@ export class ConversationsService {
       }
     }
 
+    const conv = await prisma.conversation.findUnique({
+      where: { id: conversationId },
+      select: { disappearingMode: true, status: true },
+    });
+
+    let expiresAt: Date | null = null;
+    if (conv?.disappearingMode === '24h') {
+      expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    } else if (conv?.disappearingMode === '7d') {
+      expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+    }
+
     const message = await prisma.message.create({
       data: {
         conversationId,
@@ -595,6 +637,7 @@ export class ConversationsService {
         attachmentSize,
         attachmentMime,
         clientId,
+        expiresAt,
       },
       include: {
         sender: {
@@ -622,14 +665,36 @@ export class ConversationsService {
 
     // Emit socket event if recipient exists and not silent
     if (recipientId && recipientId !== senderId && !isSilent) {
-      emitToUser(recipientId, 'message:new', {
-        conversationId,
-        message,
-      });
-      emitToUser(recipientId, 'request:new', {
-        conversationId,
-        message,
-      });
+      const recipientLockedSender = await chatLockService.isPeerLocked(recipientId, senderId);
+      if (recipientLockedSender) {
+        emitToUser(recipientId, 'message:new', {
+          conversationId,
+          isLocked: true,
+          message: {
+            id: message.id,
+            conversationId,
+            senderId,
+            type: 'text',
+            body: 'Locked chat',
+            createdAt: message.createdAt,
+            sender: message.sender,
+            isMasked: true,
+          },
+        });
+      } else {
+        emitToUser(recipientId, 'message:new', {
+          conversationId,
+          message,
+        });
+      }
+
+      if (conv?.status !== 'accepted') {
+        emitToUser(recipientId, 'request:new', {
+          conversationId,
+          message,
+        });
+      }
+
       emitToUser(recipientId, 'conversation:updated', {
         conversationId,
       });
@@ -946,7 +1011,7 @@ export class ConversationsService {
   }
 
   /**
-   * Hide / delete conversation from chat list
+   * Hide / delete conversation from chat list (soft delete: clears messages and hides chat for current user)
    */
   async hideConversation(conversationId: string, userId: string) {
     const member = await prisma.conversationMember.findUnique({
@@ -957,12 +1022,84 @@ export class ConversationsService {
       throw new NotFoundError('Conversation member record not found', 'NOT_A_MEMBER');
     }
 
+    const now = new Date();
     await prisma.conversationMember.update({
       where: { id: member.id },
-      data: { hiddenAt: new Date() },
+      data: { hiddenAt: now, clearedAt: now },
     });
 
+    emitToUser(userId, 'conversation:updated', { conversationId });
+
     return { success: true };
+  }
+
+  /**
+   * Set disappearing message mode ('off', '24h', '7d')
+   */
+  async setDisappearingMode(conversationId: string, userId: string, mode: 'off' | '24h' | '7d') {
+    const member = await prisma.conversationMember.findUnique({
+      where: { conversationId_userId: { conversationId, userId } },
+      include: {
+        conversation: {
+          include: { members: true },
+        },
+        user: {
+          select: { id: true, name: true },
+        },
+      },
+    });
+
+    if (!member) {
+      throw new ForbiddenError('You are not a member of this conversation', 'NOT_A_MEMBER');
+    }
+
+    const conv = member.conversation;
+    if (conv.status !== 'accepted' && conv.userAId !== conv.userBId) {
+      throw new BadRequestError('Disappearing messages can only be configured for accepted chats', 'NOT_ACCEPTED');
+    }
+
+    await prisma.conversation.update({
+      where: { id: conversationId },
+      data: { disappearingMode: mode },
+    });
+
+    const modeText =
+      mode === 'off'
+        ? 'turned off disappearing messages'
+        : `turned on disappearing messages: ${mode === '24h' ? '24 hours' : '7 days'}`;
+    const systemText = `${member.user.name} ${modeText}`;
+
+    const systemMessage = await prisma.message.create({
+      data: {
+        conversationId,
+        senderId: userId,
+        type: 'system',
+        body: systemText,
+      },
+      include: {
+        sender: {
+          select: { id: true, name: true, username: true, avatarUrl: true },
+        },
+      },
+    });
+
+    await prisma.conversation.update({
+      where: { id: conversationId },
+      data: { lastMessageAt: systemMessage.createdAt },
+    });
+
+    for (const m of conv.members) {
+      emitToUser(m.userId, 'message:new', {
+        conversationId,
+        message: systemMessage,
+      });
+      emitToUser(m.userId, 'conversation:updated', {
+        conversationId,
+        disappearingMode: mode,
+      });
+    }
+
+    return { success: true, disappearingMode: mode, message: systemMessage };
   }
 }
 

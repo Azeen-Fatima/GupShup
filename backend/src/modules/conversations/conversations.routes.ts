@@ -6,6 +6,7 @@ import { validate } from '../../middleware/validate';
 import {
   createConversationSchema,
   conversationIdParamSchema,
+  setDisappearingModeSchema,
 } from './conversations.schemas';
 import {
   sendMessageSchema,
@@ -30,6 +31,12 @@ router.post('/:id/block', validate(conversationIdParamSchema, 'params'), convCon
 router.post('/:id/unblock', validate(conversationIdParamSchema, 'params'), convController.unblockUser);
 router.post('/:id/clear', validate(conversationIdParamSchema, 'params'), convController.clearHistory);
 router.delete('/:id', validate(conversationIdParamSchema, 'params'), convController.deleteConversation);
+router.patch(
+  '/:id/disappearing',
+  validate(conversationIdParamSchema, 'params'),
+  validate(setDisappearingModeSchema),
+  convController.setDisappearingMode
+);
 
 // Message actions within conversation
 router.get(

@@ -6,10 +6,13 @@ export class MessagesController {
   async getMessages(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const convId = String(req.params.id);
+      const unlockToken =
+        (req.headers['x-unlock-token'] as string) || (req.query.unlockToken as string);
       const result = await messagesService.getConversationMessages(
         convId,
         req.user!.userId,
-        req.query as any
+        req.query as any,
+        unlockToken
       );
       sendSuccess(res, result);
     } catch (err) {

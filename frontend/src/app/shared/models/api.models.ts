@@ -50,6 +50,8 @@ export interface ConversationItem {
   isSelf: boolean;
   isBlockedByMe: boolean;
   isBlockedByThem: boolean;
+  isLocked?: boolean;
+  disappearingMode?: 'off' | '24h' | '7d';
   declineCount?: number;
   declinedAt?: string | null;
   canSendExtraMessage?: boolean;
@@ -75,6 +77,7 @@ export interface ConversationItem {
     seenAt: string | null;
     attachmentUrl: string | null;
     clientId?: string | null;
+    isMasked?: boolean;
   } | null;
   unreadCount: number;
 }
@@ -91,13 +94,15 @@ export interface Message {
   id: string;
   conversationId: string;
   senderId: string;
-  type: 'text' | 'image' | 'file';
+  type: 'text' | 'image' | 'file' | 'system';
   body: string | null;
   attachmentUrl: string | null;
   attachmentName?: string | null;
   attachmentSize?: string | null;
   attachmentMime?: string | null;
   clientId?: string | null;
+  expiresAt?: string | null;
+  isMasked?: boolean;
   createdAt: string;
   deliveredAt?: string | null;
   seenAt?: string | null;
@@ -210,6 +215,8 @@ export function formatConversationToChatItem(
     isIncomingRequest,
     isSelfNotes: isMe,
     photoUrl: (isMe && currentUserAvatarUrl) ? currentUserAvatarUrl : (conv.otherUser.avatarUrl || null),
+    isLocked: conv.isLocked ?? false,
+    disappearingMode: conv.disappearingMode || 'off',
     declineCount: conv.declineCount ?? 0,
     declinedAt: conv.declinedAt || null,
     canSendExtraMessage: conv.canSendExtraMessage ?? false,
@@ -244,6 +251,9 @@ export function formatMessageToChatMessage(
     timestamp: msg.createdAt,
     timeString,
     status,
+    type: msg.type || 'text',
+    expiresAt: msg.expiresAt || null,
+    isMasked: msg.isMasked || false,
     attachment: msg.attachmentUrl
       ? {
           type: (msg.type as any) || 'image',

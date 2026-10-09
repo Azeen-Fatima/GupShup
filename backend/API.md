@@ -353,7 +353,58 @@ Uploads chat attachment image (max 5MB).
 
 ---
 
-## 7. Real-Time Socket.io Events
+## 7. Chat Lock & Privacy
+
+### `GET /api/v1/chat-lock/status`
+Returns whether user has configured a 4-digit PIN and list of locked peer user IDs.
+- **Auth**: Bearer token
+- **Response**:
+```json
+{
+  "success": true,
+  "data": {
+    "hasPin": true,
+    "lockedPeerIds": ["uuid-user-1"]
+  }
+}
+```
+
+### `POST /api/v1/chat-lock/pin`
+Set or change 4-digit PIN.
+- **Auth**: Bearer token
+- **Body**: `{ "pin": "1234" }` (4 numeric digits)
+- **Response**: `{ "success": true, "data": { "success": true } }`
+
+### `POST /api/v1/chat-lock/verify`
+Verify 4-digit PIN and receive a 5-minute unlock token. Max 5 failed attempts before 5-minute lockout (429 `PIN_RATE_LIMITED`).
+- **Auth**: Bearer token
+- **Body**: `{ "pin": "1234", "peerUserId": "uuid", "conversationId": "uuid" }`
+- **Response**:
+```json
+{
+  "success": true,
+  "data": {
+    "success": true,
+    "unlockToken": "jwt-token-5m-valid"
+  }
+}
+```
+
+### `POST /api/v1/chat-lock/toggle`
+Lock or unlock a contact for the current user.
+- **Auth**: Bearer token
+- **Body**: `{ "peerUserId": "uuid", "locked": true|false }`
+- **Response**: `{ "success": true, "data": { "locked": true|false } }`
+
+### `POST /api/v1/chat-lock/reset`
+Reset PIN using account password or Google ID token.
+- **Auth**: Bearer token
+- **Body**: `{ "newPin": "5678", "password": "...", "idToken": "..." }`
+- **Response**: `{ "success": true, "data": { "success": true } }`
+
+---
+
+## 8. Real-Time Socket.io Events
 
 ### Connection & Auth
 Pass JWT token via auth handshake or Authorization header. Fallback transports `['polling', 'websocket']`:
@@ -381,12 +432,14 @@ const socket = io('http://localhost:3000', {
 |---|---|---|
 | `presence:update` | `{ "userId": "uuid", "isOnline": true/false, "lastSeen": "iso" }` | Broadcasted ONLY to accepted conversation partners |
 | `typing:update` | `{ "conversationId": "uuid", "userId": "uuid", "isTyping": true/false }` | Typing indicator (accepted chats only) |
-| `message:new` | `{ "conversationId": "uuid", "message": { ... } }` | Delivered in real-time when new message is sent |
+| `message:new` | `{ "conversationId": "uuid", "message": { ... }, "isLocked"?: true }` | Delivered in real-time when new message is sent. Masked if recipient locked the chat |
+| `message:expired` | `{ "conversationId": "uuid", "messageIds": string[] }` | Delivered when disappearing messages expire |
 | `message:delivered` | `{ "messageId": "uuid", "clientId": "uuid|null", "conversationId": "uuid", "deliveredAt": "iso" }` | Emitted to sender when recipient app receives message (2 grey ticks) |
 | `message:read` | `{ "conversationId": "uuid", "seenBy": "uuid", "seenAt": "iso", "readAt": "iso" }` | Emitted when recipient has chat open and visible (2 blue ticks) |
 | `message:seen` | `{ "conversationId": "uuid", "seenBy": "uuid", "seenAt": "iso" }` | Backwards compatibility for message read |
 | `request:new` | `{ "conversationId": "uuid" }` | Delivered to recipient when a new chat request is received |
 | `request:accepted` | `{ "conversationId": "uuid" }` | Delivered when a pending request is accepted |
 | `request:declined` | `{ "conversationId": "uuid", "declineCount": number }` | Delivered when a chat request is declined |
-| `conversation:updated`| `{ "conversationId": "uuid", ... }` | Delivered on accept, decline, block, etc. |
+| `conversation:updated`| `{ "conversationId": "uuid", "disappearingMode"?: string, ... }` | Delivered on accept, decline, block, disappearing change, unhide, etc. |
 | `user:updated` | `{ "id": "uuid", "name": "string", "avatarUrl": "string|null", "bio": "string|null", "statusMessage": "string|null" }` | Delivered to conversation partners when a user updates profile or avatar |
+

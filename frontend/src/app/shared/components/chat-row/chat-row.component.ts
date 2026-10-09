@@ -33,11 +33,20 @@ import { ChatItem } from '../../mock/mock-data';
           [initials]="chat().initials"
           [size]="'lg'"
           [showOnlineDot]="((chat().rawStatus === 'accepted' || chat().isSelfNotes) && chat().isOnline) ? true : false"
+          (click)="onAvatarClick($event)"
+          [style.cursor]="(chat().rawStatus === 'accepted' && !chat().isSelfNotes) ? 'pointer' : 'default'"
         ></app-avatar>
 
         <div class="info">
           <div class="top-line">
-            <span class="name">{{ chat().name }}</span>
+            <div class="name-wrap">
+              <span class="name">{{ chat().name }}</span>
+              @if (chat().isLocked) {
+                <span class="lock-indicator" title="Locked chat">
+                  <app-svg-icon name="lock" [size]="13"></app-svg-icon>
+                </span>
+              }
+            </div>
             @if (chat().isDeclined) {
               <span class="row-tag">Declined</span>
             } @else if (chat().isBlocked) {
@@ -108,27 +117,8 @@ import { ChatItem } from '../../mock/mock-data';
               >
                 Block
               </button>
-            } @else {
-              <!-- After accepted: Block, Clear, Delete -->
-              @if (chat().isBlocked) {
-                <button
-                  type="button"
-                  class="menu-item"
-                  (click)="handleAction('unblock')"
-                  role="menuitem"
-                >
-                  Unblock
-                </button>
-              } @else {
-                <button
-                  type="button"
-                  class="menu-item danger"
-                  (click)="handleAction('block')"
-                  role="menuitem"
-                >
-                  Block
-                </button>
-              }
+            } @else if (chat().isDeclined) {
+              <!-- Declined: keep current options -->
               <button
                 type="button"
                 class="menu-item"
@@ -137,13 +127,33 @@ import { ChatItem } from '../../mock/mock-data';
               >
                 Clear chat
               </button>
+            } @else if (chat().isBlocked) {
+              <!-- Blocked: unblock -->
               <button
                 type="button"
-                class="menu-item danger"
-                (click)="handleAction('delete')"
+                class="menu-item"
+                (click)="handleAction('unblock')"
                 role="menuitem"
               >
-                Delete chat
+                Unblock
+              </button>
+            } @else {
+              <!-- Accepted chats: ONLY View profile and Clear chat -->
+              <button
+                type="button"
+                class="menu-item"
+                (click)="handleAction('view_profile')"
+                role="menuitem"
+              >
+                View profile
+              </button>
+              <button
+                type="button"
+                class="menu-item"
+                (click)="handleAction('clear')"
+                role="menuitem"
+              >
+                Clear chat
               </button>
             }
           </div>
@@ -197,6 +207,14 @@ import { ChatItem } from '../../mock/mock-data';
       gap: 6px;
     }
 
+    .name-wrap {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      min-width: 0;
+      overflow: hidden;
+    }
+
     .name {
       font-weight: 800;
       font-size: 14.5px;
@@ -204,6 +222,13 @@ import { ChatItem } from '../../mock/mock-data';
       overflow: hidden;
       text-overflow: ellipsis;
       color: var(--ink);
+    }
+
+    .lock-indicator {
+      color: var(--amber);
+      display: inline-flex;
+      align-items: center;
+      flex-shrink: 0;
     }
 
     .time {
@@ -370,7 +395,11 @@ export class ChatRowComponent {
 
   readonly chat = input.required<ChatItem>();
   readonly rowClicked = output<ChatItem>();
-  readonly actionTriggered = output<{ action: 'delete' | 'block' | 'clear' | 'unblock'; chat: ChatItem }>();
+  readonly avatarClicked = output<ChatItem>();
+  readonly actionTriggered = output<{
+    action: 'delete' | 'block' | 'clear' | 'unblock' | 'view_profile';
+    chat: ChatItem;
+  }>();
 
   readonly menuOpen = signal<boolean>(false);
 
@@ -378,12 +407,19 @@ export class ChatRowComponent {
     this.rowClicked.emit(this.chat());
   }
 
+  onAvatarClick(event: Event): void {
+    if (this.chat().rawStatus === 'accepted' && !this.chat().isSelfNotes) {
+      event.stopPropagation();
+      this.avatarClicked.emit(this.chat());
+    }
+  }
+
   toggleMenu(event: MouseEvent): void {
     event.stopPropagation();
     this.menuOpen.update((open) => !open);
   }
 
-  handleAction(action: 'delete' | 'block' | 'clear' | 'unblock'): void {
+  handleAction(action: 'delete' | 'block' | 'clear' | 'unblock' | 'view_profile'): void {
     this.menuOpen.set(false);
     this.actionTriggered.emit({ action, chat: this.chat() });
   }

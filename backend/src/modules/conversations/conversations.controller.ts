@@ -90,4 +90,15 @@ export class ConversationsController {
       next(err);
     }
   }
+
+  async setDisappearingMode(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const convId = String(req.params.id);
+      const { mode } = req.body;
+      const result = await conversationsService.setDisappearingMode(convId, req.user!.userId, mode);
+      sendSuccess(res, result);
+    } catch (err) {
+      next(err);
+    }
+  }
 }

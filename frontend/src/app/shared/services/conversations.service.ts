@@ -169,6 +169,22 @@ export class ConversationsService {
   }
 
   /**
+   * Set disappearing message mode
+   */
+  setDisappearingMode(id: string, mode: 'off' | '24h' | '7d'): Observable<any> {
+    return this.http
+      .patch<ApiResponse<any>>(`${this.baseUrl}/${id}/disappearing`, { mode })
+      .pipe(
+        map((res) => res.data),
+        tap(() => {
+          this.conversations.update((list) =>
+            list.map((c) => (c.id === id ? { ...c, disappearingMode: mode } : c))
+          );
+        })
+      );
+  }
+
+  /**
    * Delete / hide conversation
    */
   deleteConversation(id: string): Observable<any> {
@@ -222,18 +238,20 @@ export class ConversationsService {
 
     if (existingIndex !== -1) {
       const existing = list[existingIndex];
+      const isLocked = Boolean(existing.isLocked || (message as any).isMasked);
       const updated: ConversationItem = {
         ...existing,
         lastMessage: {
           id: message.id,
-          body: message.body,
-          type: message.type,
+          body: isLocked ? 'Locked chat' : message.body,
+          type: isLocked ? 'text' : message.type,
           senderId: message.senderId,
           createdAt: message.createdAt,
           deliveredAt: message.deliveredAt || null,
           seenAt: message.seenAt || null,
-          attachmentUrl: message.attachmentUrl,
+          attachmentUrl: isLocked ? null : message.attachmentUrl,
           clientId: message.clientId || null,
+          isMasked: isLocked,
         },
         lastMessageAt: message.createdAt,
         unreadCount: isCurrentActive ? 0 : existing.unreadCount + 1,
@@ -247,6 +265,17 @@ export class ConversationsService {
       this.conversations.set(updatedList);
     } else {
       // New conversation initiated by other user: reload list
+      this.loadConversations().subscribe();
+    }
+  }
+
+  /**
+   * Real-time update: Messages expired
+   */
+  handleMessageExpired(conversationId: string, messageIds: string[]): void {
+    const list = this.conversations();
+    const conv = list.find((c) => c.id === conversationId);
+    if (conv?.lastMessage && messageIds.includes(conv.lastMessage.id)) {
       this.loadConversations().subscribe();
     }
   }
