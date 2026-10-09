@@ -402,6 +402,12 @@ Reset PIN using account password or Google ID token.
 - **Body**: `{ "newPin": "5678", "password": "...", "idToken": "..." }`
 - **Response**: `{ "success": true, "data": { "success": true } }`
 
+### `POST /relock`
+Drops active unlock state and relocks conversation (or all conversations).
+- **Auth**: Bearer token
+- **Body**: `{ "conversationId"?: "uuid" }`
+- **Response**: `{ "success": true, "data": { "success": true } }`
+
 ---
 
 ## 8. Real-Time Socket.io Events

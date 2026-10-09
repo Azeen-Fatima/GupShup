@@ -3,6 +3,7 @@ import request from 'supertest';
 import { app } from '../src/app';
 import { prisma } from '../src/db/prisma';
 import { cleanupExpiredMessages } from '../src/services/messageCleanup.service';
+import { generateUnlockToken } from '../src/utils/token';
 
 import { createTestUser } from './test.helper';
 
@@ -195,6 +196,97 @@ describe('Chat Lock, Disappearing Messages, and Soft Delete Integration Tests', 
         .set('X-Unlock-Token', unlockToken);
       expect(fetchWithToken.status).toBe(200);
       expect(Array.isArray(fetchWithToken.body.data.messages)).toBe(true);
+    });
+
+    it('cannot reuse unlock token after first messages fetch', async () => {
+      const verifyRes = await request(app)
+        .post('/api/v1/chat-lock/verify')
+        .set('Authorization', `Bearer ${userAToken}`)
+        .send({ pin: '1234', conversationId: convId });
+      expect(verifyRes.status).toBe(200);
+      const token = verifyRes.body.data.unlockToken;
+
+      // 1st fetch succeeds and consumes token
+      const firstFetch = await request(app)
+        .get(`/api/v1/conversations/${convId}/messages`)
+        .set('Authorization', `Bearer ${userAToken}`)
+        .set('X-Unlock-Token', token);
+      expect(firstFetch.status).toBe(200);
+
+      // 2nd fetch with the same token is rejected
+      const secondFetch = await request(app)
+        .get(`/api/v1/conversations/${convId}/messages`)
+        .set('Authorization', `Bearer ${userAToken}`)
+        .set('X-Unlock-Token', token);
+      expect(secondFetch.status).toBe(403);
+      expect(secondFetch.body.error.code).toBe('CHAT_LOCKED');
+    });
+
+    it('token works only for its own conversation', async () => {
+      const userC = await createTestUser('test_clc');
+      const createRes = await request(app)
+        .post('/api/v1/conversations')
+        .set('Authorization', `Bearer ${userAToken}`)
+        .send({ recipientId: userC.user.id, message: 'Hello C' });
+      const convCId = createRes.body.data.conversationId;
+
+      await request(app)
+        .post(`/api/v1/conversations/${convCId}/accept`)
+        .set('Authorization', `Bearer ${userC.accessToken}`);
+
+      await request(app)
+        .post('/api/v1/chat-lock/toggle')
+        .set('Authorization', `Bearer ${userAToken}`)
+        .send({ peerUserId: userC.user.id, locked: true });
+
+      const verifyRes = await request(app)
+        .post('/api/v1/chat-lock/verify')
+        .set('Authorization', `Bearer ${userAToken}`)
+        .send({ pin: '1234', conversationId: convId });
+      const tokenForB = verifyRes.body.data.unlockToken;
+
+      const fetchCWithTokenB = await request(app)
+        .get(`/api/v1/conversations/${convCId}/messages`)
+        .set('Authorization', `Bearer ${userAToken}`)
+        .set('X-Unlock-Token', tokenForB);
+      expect(fetchCWithTokenB.status).toBe(403);
+      expect(fetchCWithTokenB.body.error.code).toBe('CHAT_LOCKED');
+    });
+
+    it('token is rejected after re-lock', async () => {
+      const verifyRes = await request(app)
+        .post('/api/v1/chat-lock/verify')
+        .set('Authorization', `Bearer ${userAToken}`)
+        .send({ pin: '1234', conversationId: convId });
+      const token = verifyRes.body.data.unlockToken;
+
+      const relockRes = await request(app)
+        .post('/api/v1/chat-lock/relock')
+        .set('Authorization', `Bearer ${userAToken}`)
+        .send({ conversationId: convId });
+      expect(relockRes.status).toBe(200);
+
+      const fetchRes = await request(app)
+        .get(`/api/v1/conversations/${convId}/messages`)
+        .set('Authorization', `Bearer ${userAToken}`)
+        .set('X-Unlock-Token', token);
+      expect(fetchRes.status).toBe(403);
+      expect(fetchRes.body.error.code).toBe('CHAT_LOCKED');
+    });
+
+    it('expired unlock token is rejected', async () => {
+      const expiredToken = generateUnlockToken({
+        userId: userAId,
+        conversationId: convId,
+        expiresIn: '0s',
+      });
+
+      const fetchRes = await request(app)
+        .get(`/api/v1/conversations/${convId}/messages`)
+        .set('Authorization', `Bearer ${userAToken}`)
+        .set('X-Unlock-Token', expiredToken);
+      expect(fetchRes.status).toBe(403);
+      expect(fetchRes.body.error.code).toBe('CHAT_LOCKED');
     });
 
     it('locks out after 5 consecutive failed PIN attempts (429 PIN_RATE_LIMITED)', async () => {

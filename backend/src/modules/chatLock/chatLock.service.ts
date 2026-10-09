@@ -127,8 +127,25 @@ export class ChatLockService {
     // PIN is correct - clear failed attempts
     failedPinAttempts.delete(userId);
 
+    let targetConversationId = conversationId;
+    if (!targetConversationId && peerUserId) {
+      const conv = await prisma.conversation.findFirst({
+        where: {
+          OR: [
+            { userAId: userId, userBId: peerUserId },
+            { userAId: peerUserId, userBId: userId },
+          ],
+        },
+        select: { id: true },
+      });
+      if (conv) {
+        targetConversationId = conv.id;
+      }
+    }
+
     const unlockToken = generateUnlockToken({
       userId,
+      conversationId: targetConversationId || '',
       peerUserId,
     });
 
@@ -136,6 +153,47 @@ export class ChatLockService {
       success: true,
       unlockToken,
     };
+  }
+
+  private consumedTokens = new Set<string>();
+  private relockedTimestamps = new Map<string, number>();
+
+  isTokenConsumed(jti: string): boolean {
+    return this.consumedTokens.has(jti);
+  }
+
+  consumeToken(jti: string): void {
+    this.consumedTokens.add(jti);
+    setTimeout(() => {
+      this.consumedTokens.delete(jti);
+    }, 5 * 60 * 1000);
+  }
+
+  relock(userId: string, conversationId?: string) {
+    const now = Date.now();
+    if (conversationId) {
+      this.relockedTimestamps.set(`${userId}:${conversationId}`, now);
+    } else {
+      this.relockedTimestamps.set(`${userId}:all`, now);
+    }
+    return { success: true };
+  }
+
+  isRelocked(userId: string, conversationId: string, tokenIat?: number): boolean {
+    if (!tokenIat) return false;
+    const tokenIssuedMs = tokenIat * 1000;
+
+    const allRelocked = this.relockedTimestamps.get(`${userId}:all`);
+    if (allRelocked && tokenIssuedMs <= allRelocked) {
+      return true;
+    }
+
+    const convRelocked = this.relockedTimestamps.get(`${userId}:${conversationId}`);
+    if (convRelocked && tokenIssuedMs <= convRelocked) {
+      return true;
+    }
+
+    return false;
   }
 
   /**

@@ -1,6 +1,6 @@
 import { Injectable, inject, signal } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
-import { Observable, tap, map } from 'rxjs';
+import { Observable, tap, map, catchError, of } from 'rxjs';
 import { environment } from '../../../environments/environment';
 import { ApiResponse } from '../models/api.models';
 
@@ -19,6 +19,7 @@ export class ChatLockService {
   // Status signals
   readonly hasPin = signal<boolean>(false);
   readonly lockedPeerIds = signal<string[]>([]);
+  readonly unlockedChatId = signal<string | null>(null);
 
   // In-memory unlock tokens keyed by peerUserId or conversationId
   private readonly tokens = new Map<string, UnlockTokenInfo>();
@@ -29,6 +30,7 @@ export class ChatLockService {
       document.addEventListener('visibilitychange', () => {
         if (document.hidden) {
           this.clearAllTokens();
+          this.relock().subscribe();
         }
       });
     }
@@ -70,12 +72,13 @@ export class ChatLockService {
         map((res) => res.data || { success: false }),
         tap((data) => {
           if (data.unlockToken) {
-            const expiresAt = Date.now() + 5 * 60 * 1000;
+            const expiresAt = Date.now() + 60 * 1000;
             if (peerUserId) {
               this.tokens.set(peerUserId, { token: data.unlockToken, expiresAt });
             }
             if (conversationId) {
               this.tokens.set(conversationId, { token: data.unlockToken, expiresAt });
+              this.unlockedChatId.set(conversationId);
             }
           }
         })
@@ -114,6 +117,25 @@ export class ChatLockService {
       );
   }
 
+  relock(conversationId?: string): Observable<boolean> {
+    if (conversationId) {
+      this.clearToken(conversationId);
+      if (this.unlockedChatId() === conversationId) {
+        this.unlockedChatId.set(null);
+      }
+    } else {
+      this.clearAllTokens();
+      this.unlockedChatId.set(null);
+    }
+
+    return this.http
+      .post<ApiResponse<{ success: boolean }>>(`${this.baseUrl}/relock`, { conversationId })
+      .pipe(
+        map((res) => Boolean(res.data?.success ?? true)),
+        catchError(() => of(true))
+      );
+  }
+
   getUnlockToken(key?: string): string | null {
     if (!key) return null;
     const item = this.tokens.get(key);
@@ -126,18 +148,25 @@ export class ChatLockService {
   }
 
   isUnlocked(key?: string): boolean {
+    if (!key) return false;
+    if (this.unlockedChatId() === key) return true;
     return Boolean(this.getUnlockToken(key));
   }
 
   setUnlockToken(key: string, token: string): void {
-    this.tokens.set(key, { token, expiresAt: Date.now() + 5 * 60 * 1000 });
+    this.tokens.set(key, { token, expiresAt: Date.now() + 60 * 1000 });
+    this.unlockedChatId.set(key);
   }
 
   clearToken(key: string): void {
     this.tokens.delete(key);
+    if (this.unlockedChatId() === key) {
+      this.unlockedChatId.set(null);
+    }
   }
 
   clearAllTokens(): void {
     this.tokens.clear();
+    this.unlockedChatId.set(null);
   }
 }

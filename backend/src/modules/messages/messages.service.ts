@@ -35,9 +35,22 @@ export class MessagesService {
       if (peerUserId !== userId) {
         const isLocked = await chatLockService.isPeerLocked(userId, peerUserId);
         if (isLocked) {
-          if (!unlockToken || !verifyUnlockToken(unlockToken, userId, peerUserId)) {
+          if (!unlockToken) {
             throw new ForbiddenError('Chat is locked. PIN verification required.', 'CHAT_LOCKED');
           }
+          const verification = verifyUnlockToken(unlockToken, userId, conversationId, peerUserId);
+          if (!verification.valid || !verification.jti) {
+            throw new ForbiddenError('Chat is locked. PIN verification required.', 'CHAT_LOCKED');
+          }
+          if (chatLockService.isTokenConsumed(verification.jti)) {
+            throw new ForbiddenError('Unlock token has expired or already been used.', 'CHAT_LOCKED');
+          }
+          if (chatLockService.isRelocked(userId, conversationId, verification.iat)) {
+            throw new ForbiddenError('Chat has been re-locked. PIN verification required.', 'CHAT_LOCKED');
+          }
+
+          // Consume token after first message fetch so it cannot be reused to open chat later
+          chatLockService.consumeToken(verification.jti);
         }
       }
     }

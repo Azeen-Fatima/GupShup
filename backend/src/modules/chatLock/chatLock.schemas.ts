@@ -21,7 +21,13 @@ export const resetPinSchema = z.object({
   idToken: z.string().optional(),
 });
 
+export const relockSchema = z.object({
+  conversationId: z.string().uuid().optional(),
+});
+
 export type SetPinInput = z.infer<typeof setPinSchema>;
 export type VerifyPinInput = z.infer<typeof verifyPinSchema>;
 export type ToggleChatLockInput = z.infer<typeof toggleChatLockSchema>;
 export type ResetPinInput = z.infer<typeof resetPinSchema>;
+export type RelockInput = z.infer<typeof relockSchema>;
+

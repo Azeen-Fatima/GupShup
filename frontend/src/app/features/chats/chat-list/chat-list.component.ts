@@ -814,7 +814,7 @@ export class ChatListComponent implements OnInit {
   }
 
   openChat(chat: ChatItem): void {
-    if (chat.isLocked && !this.chatLockService.isUnlocked(chat.id)) {
+    if (chat.isLocked) {
       this.pinInput = '';
       this.pinError.set('');
       this.lockModalChat.set(chat);

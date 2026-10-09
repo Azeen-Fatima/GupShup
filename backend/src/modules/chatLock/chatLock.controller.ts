@@ -54,4 +54,14 @@ export class ChatLockController {
       next(err);
     }
   }
+
+  async relock(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const result = chatLockService.relock(req.user!.userId, req.body?.conversationId);
+      sendSuccess(res, result);
+    } catch (err) {
+      next(err);
+    }
+  }
 }
+

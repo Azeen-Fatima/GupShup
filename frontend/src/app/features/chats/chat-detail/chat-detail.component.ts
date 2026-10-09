@@ -53,7 +53,7 @@ import { EmptyStateComponent } from '../../../shared/components/empty-state/empt
     <div class="chat-detail-screen">
       <!-- Chat Header -->
       <header class="chat-header">
-        <a routerLink="/chats" class="back-btn" title="Back to chats" aria-label="Back to chats">
+        <a routerLink="/chats" class="back-btn" (click)="onBackClick()" title="Back to chats" aria-label="Back to chats">
           <app-svg-icon name="back" [size]="20"></app-svg-icon>
         </a>
 
@@ -186,6 +186,9 @@ import { EmptyStateComponent } from '../../../shared/components/empty-state/empt
             }
 
             <div class="lock-panel-actions">
+              <button type="button" class="detail-cancel-btn" (click)="cancelUnlock()">
+                Cancel
+              </button>
               <button type="button" class="detail-unlock-btn" (click)="submitDetailUnlock()">
                 Unlock
               </button>
@@ -1256,14 +1259,33 @@ import { EmptyStateComponent } from '../../../shared/components/empty-state/empt
     }
 
     .lock-panel-actions {
+      display: flex;
+      gap: 8px;
       width: 100%;
-      max-width: 180px;
+      max-width: 220px;
       margin-bottom: 12px;
     }
 
+    .detail-cancel-btn {
+      flex: 1;
+      padding: 10px 14px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background-color: var(--input);
+      color: var(--ink);
+      font-size: 13.5px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: background-color 0.15s ease;
+
+      &:hover {
+        background-color: var(--hover);
+      }
+    }
+
     .detail-unlock-btn {
-      width: 100%;
-      padding: 10px 16px;
+      flex: 1;
+      padding: 10px 14px;
       border-radius: 999px;
       border: none;
       background-color: var(--amber);
@@ -1598,6 +1620,10 @@ export class ChatDetailComponent implements OnDestroy {
     const id = this.chatId();
     if (document.hidden) {
       this.conversationsService.activeConversationId.set(null);
+      if (this.chat()?.isLocked || (id && this.chatLockService.isUnlocked(id))) {
+        this.chatLockService.relock(id).subscribe();
+        this.messages.set([]);
+      }
     } else {
       if (id) {
         this.conversationsService.activeConversationId.set(id);
@@ -2543,15 +2569,44 @@ export class ChatDetailComponent implements OnDestroy {
 
   onHeaderUserClick(): void {
     if (this.isAcceptedChat()) {
-      this.router.navigate(['/chats', this.chatId(), 'info']);
+      const id = this.chatId();
+      if (this.chat()?.isLocked || (id && this.chatLockService.isUnlocked(id))) {
+        this.chatLockService.relock(id).subscribe();
+      }
+      this.messages.set([]);
+      this.router.navigate(['/chats', id, 'info']);
     }
   }
 
   viewProfile(): void {
     this.headerMenuOpen.set(false);
     if (this.isAcceptedChat()) {
-      this.router.navigate(['/chats', this.chatId(), 'info']);
+      const id = this.chatId();
+      if (this.chat()?.isLocked || (id && this.chatLockService.isUnlocked(id))) {
+        this.chatLockService.relock(id).subscribe();
+      }
+      this.messages.set([]);
+      this.router.navigate(['/chats', id, 'info']);
     }
+  }
+
+  onBackClick(): void {
+    const id = this.chatId();
+    if (this.chat()?.isLocked || (id && this.chatLockService.isUnlocked(id))) {
+      this.chatLockService.relock(id).subscribe();
+    }
+    this.messages.set([]);
+    this.chat.set(null);
+  }
+
+  cancelUnlock(): void {
+    const id = this.chatId();
+    if (this.chat()?.isLocked || (id && this.chatLockService.isUnlocked(id))) {
+      this.chatLockService.relock(id).subscribe();
+    }
+    this.messages.set([]);
+    this.chat.set(null);
+    this.router.navigate(['/chats']);
   }
 
   submitDetailUnlock(): void {
@@ -2639,6 +2694,12 @@ export class ChatDetailComponent implements OnDestroy {
   ngOnDestroy(): void {
     document.removeEventListener('visibilitychange', this.onVisibilityChange);
     this.conversationsService.activeConversationId.set(null);
+    const id = this.chatId();
+    if (this.chat()?.isLocked || (id && this.chatLockService.isUnlocked(id))) {
+      this.chatLockService.relock(id).subscribe();
+    }
+    this.messages.set([]);
+    this.chat.set(null);
     this.subscriptions.forEach((s) => s.unsubscribe());
     this.subscriptions = [];
     if (this.typingStopTimer) {

@@ -7,6 +7,7 @@ import {
   verifyPinSchema,
   toggleChatLockSchema,
   resetPinSchema,
+  relockSchema,
 } from './chatLock.schemas';
 
 const router = Router();
@@ -19,5 +20,6 @@ router.post('/pin', validate(setPinSchema), controller.setPin);
 router.post('/verify', validate(verifyPinSchema), controller.verifyPin);
 router.post('/toggle', validate(toggleChatLockSchema), controller.toggleLock);
 router.post('/reset-pin', validate(resetPinSchema), controller.resetPin);
+router.post('/relock', validate(relockSchema), controller.relock);
 
 export default router;

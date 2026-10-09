@@ -75,27 +75,68 @@ export function hashToken(token: string): string {
 
 export interface UnlockTokenPayload {
   userId: string;
+  conversationId: string;
   peerUserId?: string;
+  jti: string;
+  iat?: number;
+  exp?: number;
   purpose: 'chat_unlock';
 }
 
-export function generateUnlockToken(payload: { userId: string; peerUserId?: string }): string {
-  return jwt.sign({ ...payload, purpose: 'chat_unlock' }, env.JWT_ACCESS_SECRET, {
-    expiresIn: '5m',
-  });
+export function generateUnlockToken(payload: {
+  userId: string;
+  conversationId: string;
+  peerUserId?: string;
+  expiresIn?: string;
+}): string {
+  const jti = crypto.randomUUID();
+  return jwt.sign(
+    {
+      userId: payload.userId,
+      conversationId: payload.conversationId,
+      peerUserId: payload.peerUserId,
+      jti,
+      purpose: 'chat_unlock',
+    },
+    env.JWT_ACCESS_SECRET,
+    {
+      expiresIn: (payload.expiresIn || '60s') as any,
+    }
+  );
 }
 
-export function verifyUnlockToken(token: string, expectedUserId: string, expectedPeerUserId?: string): boolean {
+export interface VerifyUnlockTokenResult {
+  valid: boolean;
+  jti?: string;
+  iat?: number;
+  conversationId?: string;
+}
+
+export function verifyUnlockToken(
+  token: string,
+  expectedUserId: string,
+  expectedConversationId?: string,
+  expectedPeerUserId?: string
+): VerifyUnlockTokenResult {
   try {
     const decoded = jwt.verify(token, env.JWT_ACCESS_SECRET) as UnlockTokenPayload;
     if (decoded.purpose !== 'chat_unlock' || decoded.userId !== expectedUserId) {
-      return false;
+      return { valid: false };
+    }
+    if (expectedConversationId && decoded.conversationId !== expectedConversationId) {
+      return { valid: false };
     }
     if (expectedPeerUserId && decoded.peerUserId && decoded.peerUserId !== expectedPeerUserId) {
-      return false;
+      return { valid: false };
     }
-    return true;
+    return {
+      valid: true,
+      jti: decoded.jti,
+      iat: decoded.iat,
+      conversationId: decoded.conversationId,
+    };
   } catch {
-    return false;
+    return { valid: false };
   }
 }
+
