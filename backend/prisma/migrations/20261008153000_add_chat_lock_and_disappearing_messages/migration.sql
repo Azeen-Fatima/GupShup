@@ -1,14 +1,14 @@
 -- AlterTable
-ALTER TABLE "User" ADD COLUMN "chatLockPinHash" TEXT;
+ALTER TABLE "User" ADD COLUMN IF NOT EXISTS "chatLockPinHash" TEXT;
 
 -- AlterTable
-ALTER TABLE "Conversation" ADD COLUMN "disappearingMode" TEXT NOT NULL DEFAULT 'off';
+ALTER TABLE "Conversation" ADD COLUMN IF NOT EXISTS "disappearingMode" TEXT NOT NULL DEFAULT 'off';
 
 -- AlterTable
-ALTER TABLE "Message" ADD COLUMN "expiresAt" TIMESTAMP(3);
+ALTER TABLE "Message" ADD COLUMN IF NOT EXISTS "expiresAt" TIMESTAMP(3);
 
 -- CreateTable
-CREATE TABLE "ChatLock" (
+CREATE TABLE IF NOT EXISTS "ChatLock" (
     "id" TEXT NOT NULL,
     "userId" TEXT NOT NULL,
     "peerUserId" TEXT NOT NULL,
@@ -18,19 +18,27 @@ CREATE TABLE "ChatLock" (
 );
 
 -- CreateIndex
-CREATE UNIQUE INDEX "ChatLock_userId_peerUserId_key" ON "ChatLock"("userId", "peerUserId");
+CREATE UNIQUE INDEX IF NOT EXISTS "ChatLock_userId_peerUserId_key" ON "ChatLock"("userId", "peerUserId");
 
 -- CreateIndex
-CREATE INDEX "ChatLock_userId_idx" ON "ChatLock"("userId");
+CREATE INDEX IF NOT EXISTS "ChatLock_userId_idx" ON "ChatLock"("userId");
 
 -- CreateIndex
-CREATE INDEX "ChatLock_peerUserId_idx" ON "ChatLock"("peerUserId");
+CREATE INDEX IF NOT EXISTS "ChatLock_peerUserId_idx" ON "ChatLock"("peerUserId");
 
 -- CreateIndex
-CREATE INDEX "Message_expiresAt_idx" ON "Message"("expiresAt");
+CREATE INDEX IF NOT EXISTS "Message_expiresAt_idx" ON "Message"("expiresAt");
 
 -- AddForeignKey
-ALTER TABLE "ChatLock" ADD CONSTRAINT "ChatLock_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ChatLock_userId_fkey') THEN
+        ALTER TABLE "ChatLock" ADD CONSTRAINT "ChatLock_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+    END IF;
+END $$;
 
 -- AddForeignKey
-ALTER TABLE "ChatLock" ADD CONSTRAINT "ChatLock_peerUserId_fkey" FOREIGN KEY ("peerUserId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ChatLock_peerUserId_fkey') THEN
+        ALTER TABLE "ChatLock" ADD CONSTRAINT "ChatLock_peerUserId_fkey" FOREIGN KEY ("peerUserId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+    END IF;
+END $$;
