@@ -34,7 +34,9 @@ Fill in the required environment variables in `backend/.env`:
 - `JWT_REFRESH_SECRET`
 
 *Optional integrations:*
-- `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS` (Falls back to logging OTPs to console in dev)
+- `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET`, `GMAIL_REFRESH_TOKEN`, `GMAIL_SENDER` (Primary email provider via Gmail API OAuth2 `users.messages.send`)
+- `RESEND_API_KEY` (Secondary email provider fallback via Resend HTTP API)
+- `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS` (Tertiary fallback to SMTP, or console log-only if omitted)
 - `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET` (Returns clean 503 if omitted)
 - `GOOGLE_CLIENT_ID` (Returns clean 503 if omitted)
 
@@ -88,7 +90,11 @@ npm start
    - `JWT_REFRESH_EXPIRES`: `7d`
    - `CLIENT_ORIGINS`: Comma-separated list of allowed frontend origins (e.g. `https://gupshup-app.onrender.com,http://localhost:4200`)
    - `COOKIE_SAMESITE`: `lax` (default, recommended when using Render Static Site `/api/*` rewrite proxy) or `none` (if using separate domains without rewrite)
-   - `RESEND_API_KEY`: Resend API key (recommended because Render free tier blocks outbound SMTP ports 25, 465, 587)
+   - `GMAIL_CLIENT_ID`: Google OAuth2 Client ID for Gmail API (Primary email provider)
+   - `GMAIL_CLIENT_SECRET`: Google OAuth2 Client Secret for Gmail API
+   - `GMAIL_REFRESH_TOKEN`: Google OAuth2 Refresh Token for Gmail API
+   - `GMAIL_SENDER`: Email address or display name (e.g. `Gupshup <you@gmail.com>`)
+   - `RESEND_API_KEY`: Resend API key (secondary fallback)
    - `MAIL_FROM`: `Gupshup <onboarding@resend.dev>` (or your verified domain on Resend)
    - `CLOUDINARY_CLOUD_NAME`: Cloudinary cloud name
    - `CLOUDINARY_API_KEY`: Cloudinary API key

@@ -1,4 +1,5 @@
 import nodemailer from 'nodemailer';
+import { OAuth2Client } from 'google-auth-library';
 import { env } from '../config/env';
 import { logger } from '../config/logger';
 import { ServiceUnavailableError } from './errors';
@@ -26,9 +27,19 @@ export function clearCapturedMails(): void {
   capturedMails.length = 0;
 }
 
-export type EmailProviderType = 'resend' | 'smtp' | 'log_only';
+export type EmailProviderType = 'gmail' | 'resend' | 'smtp' | 'log_only';
 
 export function getActiveEmailProvider(): EmailProviderType {
+  if (
+    env.GMAIL_CLIENT_ID &&
+    env.GMAIL_CLIENT_ID.trim().length > 0 &&
+    env.GMAIL_CLIENT_SECRET &&
+    env.GMAIL_CLIENT_SECRET.trim().length > 0 &&
+    env.GMAIL_REFRESH_TOKEN &&
+    env.GMAIL_REFRESH_TOKEN.trim().length > 0
+  ) {
+    return 'gmail';
+  }
   if (env.RESEND_API_KEY && env.RESEND_API_KEY.trim().length > 0) {
     return 'resend';
   }
@@ -44,13 +55,63 @@ export function logActiveEmailProvider(): void {
   hasLoggedProvider = true;
 
   const provider = getActiveEmailProvider();
-  if (provider === 'resend') {
-    logger.info('[Email] Active email provider: Resend HTTP API (Primary)');
+  if (provider === 'gmail') {
+    logger.info('[Email] Active email provider: Gmail API via OAuth2 (Primary)');
+  } else if (provider === 'resend') {
+    logger.info('[Email] Active email provider: Resend HTTP API (Secondary fallback)');
   } else if (provider === 'smtp') {
     logger.info('[Email] Active email provider: SMTP (Nodemailer fallback)');
   } else {
     logger.info('[Email] Active email provider: Console/Log-only (No external mail credentials set)');
   }
+}
+
+export function buildRawMimeMessage(options: {
+  from: string;
+  to: string;
+  subject: string;
+  text: string;
+  html?: string;
+}): string {
+  const boundary = `gupshup_part_${Date.now()}_${Math.random().toString(36).substring(2)}`;
+  const encodedSubject = `=?utf-8?B?${Buffer.from(options.subject, 'utf-8').toString('base64')}?=`;
+
+  const lines: string[] = [
+    `From: ${options.from}`,
+    `To: ${options.to}`,
+    `Subject: ${encodedSubject}`,
+    'MIME-Version: 1.0',
+  ];
+
+  if (options.html) {
+    lines.push(
+      `Content-Type: multipart/alternative; boundary="${boundary}"`,
+      '',
+      `--${boundary}`,
+      'Content-Type: text/plain; charset="UTF-8"',
+      'Content-Transfer-Encoding: 7bit',
+      '',
+      options.text,
+      '',
+      `--${boundary}`,
+      'Content-Type: text/html; charset="UTF-8"',
+      'Content-Transfer-Encoding: 7bit',
+      '',
+      options.html,
+      '',
+      `--${boundary}--`
+    );
+  } else {
+    lines.push(
+      'Content-Type: text/plain; charset="UTF-8"',
+      'Content-Transfer-Encoding: 7bit',
+      '',
+      options.text
+    );
+  }
+
+  const rawMime = lines.join('\r\n');
+  return Buffer.from(rawMime, 'utf-8').toString('base64url');
 }
 
 let transporter: nodemailer.Transporter | null = null;
@@ -100,7 +161,67 @@ export async function sendOtpEmail(to: string, code: string, purposeDescription:
 
   const provider = getActiveEmailProvider();
 
-  // 1. Resend HTTP API path
+  // 1. Gmail API via OAuth2 path
+  if (provider === 'gmail') {
+    try {
+      const oauth2Client = new OAuth2Client(
+        env.GMAIL_CLIENT_ID.trim(),
+        env.GMAIL_CLIENT_SECRET.trim()
+      );
+      oauth2Client.setCredentials({
+        refresh_token: env.GMAIL_REFRESH_TOKEN.trim(),
+      });
+
+      const { token: accessToken } = await oauth2Client.getAccessToken();
+      if (!accessToken) {
+        throw new Error('Failed to retrieve access token from Google OAuth2 client');
+      }
+
+      const fromAddress = env.GMAIL_SENDER?.trim() || env.MAIL_FROM;
+      const raw = buildRawMimeMessage({
+        from: fromAddress,
+        to: mail.to,
+        subject: mail.subject,
+        text: mail.text,
+        html: mail.html,
+      });
+
+      const response = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ raw }),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => '');
+        logger.error(
+          { status: response.status, body: errorText, to },
+          'Gmail API error response when sending OTP'
+        );
+        throw new ServiceUnavailableError(
+          "We couldn't send the email right now. Please try again.",
+          'EMAIL_SEND_FAILED'
+        );
+      }
+
+      logger.info({ to }, 'OTP email successfully dispatched via Gmail API');
+      return;
+    } catch (err: any) {
+      if (err instanceof ServiceUnavailableError) {
+        throw err;
+      }
+      logger.error({ err: err.message, to }, 'Failed to send email via Gmail API');
+      throw new ServiceUnavailableError(
+        "We couldn't send the email right now. Please try again.",
+        'EMAIL_SEND_FAILED'
+      );
+    }
+  }
+
+  // 2. Resend HTTP API path
   if (provider === 'resend') {
     try {
       const response = await fetch('https://api.resend.com/emails', {
@@ -144,7 +265,7 @@ export async function sendOtpEmail(to: string, code: string, purposeDescription:
     }
   }
 
-  // 2. SMTP Nodemailer path
+  // 3. SMTP Nodemailer path
   if (provider === 'smtp') {
     const mailTransporter = getTransporter();
     if (mailTransporter) {
@@ -165,8 +286,8 @@ export async function sendOtpEmail(to: string, code: string, purposeDescription:
     return;
   }
 
-  // 3. Log-only path (development / test without credentials)
+  // 4. Log-only path (development / test without credentials)
   if (env.NODE_ENV === 'production') {
-    logger.warn('No email provider configured in production (RESEND_API_KEY or SMTP credentials missing).');
+    logger.warn('No email provider configured in production (GMAIL_, RESEND_API_KEY, or SMTP credentials missing).');
   }
 }

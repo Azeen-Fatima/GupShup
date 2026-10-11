@@ -103,7 +103,11 @@ The frontend runs on `http://localhost:4200` and proxies or connects directly to
   - `JWT_REFRESH_EXPIRES`: `7d`
   - `CLIENT_ORIGINS`: Frontend URL(s) comma-separated (e.g. `https://gupshup-app.onrender.com,http://localhost:4200`)
   - `COOKIE_SAMESITE`: `lax` (keeps refresh token first-party via static-site rewrite proxy)
-  - `RESEND_API_KEY`: Resend API key (avoids blocked SMTP ports on Render free tier)
+  - `GMAIL_CLIENT_ID`: Google OAuth2 Client ID for Gmail API (Primary email provider)
+  - `GMAIL_CLIENT_SECRET`: Google OAuth2 Client Secret for Gmail API
+  - `GMAIL_REFRESH_TOKEN`: Google OAuth2 Refresh Token for Gmail API
+  - `GMAIL_SENDER`: Email address or display name (e.g. `Gupshup <you@gmail.com>`)
+  - `RESEND_API_KEY`: Resend API key (secondary email provider fallback)
   - `MAIL_FROM`: `Gupshup <onboarding@resend.dev>`
   - `CLOUDINARY_CLOUD_NAME`: Cloudinary cloud name
   - `CLOUDINARY_API_KEY`: Cloudinary API key
