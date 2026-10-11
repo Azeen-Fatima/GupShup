@@ -31,6 +31,12 @@ export const routes: Routes = [
     title: 'Forgot Password · Gupshup',
   },
   {
+    path: 'privacy',
+    loadComponent: () =>
+      import('./features/privacy/privacy.component').then((m) => m.PrivacyComponent),
+    title: 'Privacy Policy · Gupshup',
+  },
+  {
     path: 'chats',
     loadComponent: () =>
       import('./features/chats/chat-list/chat-list.component').then((m) => m.ChatListComponent),

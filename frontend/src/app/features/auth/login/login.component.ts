@@ -100,6 +100,10 @@ import { GoogleAuthService } from '../../../shared/services/google-auth.service'
           New here?
           <a routerLink="/signup" class="brand-link">Create an account</a>
         </p>
+
+        <p class="auth-legal">
+          <a routerLink="/privacy" class="legal-link">Privacy Policy</a>
+        </p>
       </div>
     </div>
   `,
@@ -320,6 +324,24 @@ import { GoogleAuthService } from '../../../shared/services/google-auth.service'
       font-size: 12.5px;
       color: var(--muted);
       margin-top: 22px;
+    }
+
+    .auth-legal {
+      text-align: center;
+      margin-top: 14px;
+    }
+
+    .legal-link {
+      font-size: 11.5px;
+      font-weight: 600;
+      color: var(--muted);
+      text-decoration: none;
+      transition: color 0.15s ease;
+
+      &:hover {
+        color: var(--amber-text);
+        text-decoration: underline;
+      }
     }
 
     .brand-link {
