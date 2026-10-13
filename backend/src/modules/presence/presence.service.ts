@@ -99,6 +99,41 @@ export class PresenceService {
       logger.error({ err, conversationId, userId }, 'Failed to clear typing status');
     }
   }
+
+  /**
+   * Set user as actively viewing a conversation
+   */
+  async setActiveConversation(userId: string, conversationId: string): Promise<void> {
+    try {
+      await redis.set(`active_chat:${userId}`, conversationId, 'EX', this.PRESENCE_TTL_SECONDS);
+    } catch (err) {
+      logger.error({ err, userId, conversationId }, 'Failed to set active conversation');
+    }
+  }
+
+  /**
+   * Clear active conversation for user
+   */
+  async clearActiveConversation(userId: string): Promise<void> {
+    try {
+      await redis.del(`active_chat:${userId}`);
+    } catch (err) {
+      logger.error({ err, userId }, 'Failed to clear active conversation');
+    }
+  }
+
+  /**
+   * Check if user is actively viewing a conversation
+   */
+  async isViewingConversation(userId: string, conversationId: string): Promise<boolean> {
+    try {
+      const active = await redis.get(`active_chat:${userId}`);
+      return active === conversationId;
+    } catch (err) {
+      logger.error({ err, userId, conversationId }, 'Failed to check active conversation');
+      return false;
+    }
+  }
 }
 
 export const presenceService = new PresenceService();

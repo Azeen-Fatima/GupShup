@@ -25,6 +25,8 @@ export const logger = pino({
       'token',
       'refreshToken',
       'signupToken',
+      'vapidPrivateKey',
+      'VAPID_PRIVATE_KEY',
     ],
     remove: true,
   },

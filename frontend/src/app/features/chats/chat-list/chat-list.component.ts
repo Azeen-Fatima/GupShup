@@ -8,6 +8,7 @@ import { AuthService } from '../../../shared/services/auth.service';
 import { SocketService } from '../../../shared/services/socket.service';
 import { ToastService } from '../../../shared/services/toast.service';
 import { ChatLockService } from '../../../shared/services/chat-lock.service';
+import { PushNotificationService } from '../../../shared/services/push-notification.service';
 import {
   formatConversationToChatItem,
   getInitials,
@@ -83,6 +84,27 @@ import { EmptyStateComponent } from '../../../shared/components/empty-state/empt
           aria-label="Search chats input"
         />
       </div>
+
+      <!-- Soft Push Notification Banner -->
+      @if (showPushBanner()) {
+        <div class="push-soft-banner" role="status">
+          <div class="push-banner-content">
+            <div class="push-banner-icon-wrap">
+              <app-svg-icon name="bell" [size]="16"></app-svg-icon>
+            </div>
+            <div class="push-banner-text">
+              <span class="push-banner-title">Turn on notifications</span>
+              <span class="push-banner-desc">Get notified when new messages arrive</span>
+            </div>
+          </div>
+          <div class="push-banner-actions">
+            <button type="button" class="push-action-btn" (click)="enablePushFromBanner()">Turn on</button>
+            <button type="button" class="push-dismiss-btn" (click)="dismissPushBanner()" aria-label="Dismiss banner">
+              <app-svg-icon name="close" [size]="14"></app-svg-icon>
+            </button>
+          </div>
+        </div>
+      }
 
       <!-- Scrollable Chat List (Internal scroll only) -->
       <div class="chat-list-container" role="feed" aria-label="Chats feed">
@@ -385,6 +407,95 @@ import { EmptyStateComponent } from '../../../shared/components/empty-state/empt
       }
     }
 
+    .push-soft-banner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 10px 16px;
+      background: linear-gradient(135deg, rgba(232, 162, 61, 0.12), rgba(232, 162, 61, 0.05));
+      border-bottom: 1px solid rgba(232, 162, 61, 0.25);
+      flex-shrink: 0;
+    }
+
+    .push-banner-content {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+    }
+
+    .push-banner-icon-wrap {
+      width: 30px;
+      height: 30px;
+      border-radius: 50%;
+      background: rgba(232, 162, 61, 0.2);
+      color: #b46b14;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+
+    .push-banner-text {
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+    }
+
+    .push-banner-title {
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--ink);
+      line-height: 1.2;
+    }
+
+    .push-banner-desc {
+      font-size: 11.5px;
+      color: var(--muted);
+      line-height: 1.2;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .push-banner-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-shrink: 0;
+    }
+
+    .push-action-btn {
+      padding: 5px 12px;
+      font-size: 12px;
+      font-weight: 700;
+      border-radius: 9999px;
+      border: none;
+      background: var(--amber);
+      color: #fff;
+      cursor: pointer;
+      transition: opacity 0.15s ease;
+      &:hover {
+        opacity: 0.9;
+      }
+    }
+
+    .push-dismiss-btn {
+      background: transparent;
+      border: none;
+      color: var(--muted);
+      cursor: pointer;
+      padding: 4px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      &:hover {
+        color: var(--ink);
+      }
+    }
+
     /* Scrollable chat list: strictly internal scroll, padding-bottom to clear FAB */
     .chat-list-container {
       flex: 1;
@@ -675,6 +786,19 @@ export class ChatListComponent implements OnInit {
   private readonly chatLockService = inject(ChatLockService);
   private readonly router = inject(Router);
   private readonly toast = inject(ToastService);
+  private readonly pushService = inject(PushNotificationService);
+
+  readonly pushDismissed = signal<boolean>(
+    typeof window !== 'undefined' && localStorage.getItem('gupshup_push_banner_dismissed') === 'true'
+  );
+  readonly showPushBanner = computed(() => {
+    return (
+      this.pushService.isSupported() &&
+      this.pushService.permission() === 'default' &&
+      !this.pushService.pushEnabled() &&
+      !this.pushDismissed()
+    );
+  });
 
   readonly searchOpen = signal<boolean>(false);
   readonly searchQuery = signal<string>('');
@@ -936,5 +1060,21 @@ export class ChatListComponent implements OnInit {
 
   closeModal(): void {
     this.modalState.update((s) => ({ ...s, isOpen: false, onConfirm: null }));
+  }
+
+  async enablePushFromBanner(): Promise<void> {
+    const success = await this.pushService.subscribe();
+    if (success) {
+      this.toast.success('Push notifications enabled!');
+    } else {
+      this.toast.info('Could not enable push notifications.');
+    }
+  }
+
+  dismissPushBanner(): void {
+    this.pushDismissed.set(true);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('gupshup_push_banner_dismissed', 'true');
+    }
   }
 }

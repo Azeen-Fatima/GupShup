@@ -31,6 +31,7 @@ model User {
   blocksReceived         Block[]          @relation("Blocked")
   chatLocks              ChatLock[]       @relation("UserChatLocks")
   lockedByPeers          ChatLock[]       @relation("PeerChatLocks")
+  pushSubscriptions      PushSubscription[]
   refreshTokens          RefreshToken[]
 
   @@index([email])
@@ -144,4 +145,18 @@ model RefreshToken {
 
   @@index([userId])
   @@index([tokenHash])
+}
+
+model PushSubscription {
+  id        String   @id @default(uuid())
+  userId    String
+  endpoint  String   @unique
+  p256dh    String
+  auth      String
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }

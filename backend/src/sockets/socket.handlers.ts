@@ -192,6 +192,15 @@ export function registerSocketHandlers(io: Server, socket: AuthenticatedSocket) 
     }
   });
 
+  // Conversation view tracking for push suppression
+  socket.on('conversation:view', async (data: { conversationId?: string | null }) => {
+    if (data?.conversationId) {
+      await presenceService.setActiveConversation(userId, data.conversationId);
+    } else {
+      await presenceService.clearActiveConversation(userId);
+    }
+  });
+
   // Disconnect handler
   socket.on('disconnect', async (reason) => {
     logger.info({ userId, socketId: socket.id, reason }, 'Socket client disconnected');
@@ -202,6 +211,7 @@ export function registerSocketHandlers(io: Server, socket: AuthenticatedSocket) 
       const remainingSocketsCount = room ? room.size : 0;
 
       if (remainingSocketsCount === 0) {
+        await presenceService.clearActiveConversation(userId);
         await presenceService.setOffline(userId);
         const lastSeen = await presenceService.getLastSeen(userId);
         await broadcastPresenceToAcceptedPartners(userId, false, lastSeen);

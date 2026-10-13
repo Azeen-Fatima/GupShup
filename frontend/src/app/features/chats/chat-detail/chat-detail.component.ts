@@ -21,6 +21,7 @@ import { SocketService } from '../../../shared/services/socket.service';
 import { AuthService } from '../../../shared/services/auth.service';
 import { ToastService } from '../../../shared/services/toast.service';
 import { ChatLockService } from '../../../shared/services/chat-lock.service';
+import { OfflineQueueService } from '../../../shared/services/offline-queue.service';
 import {
   formatConversationToChatItem,
   formatMessageToChatMessage,
@@ -1444,6 +1445,7 @@ export class ChatDetailComponent implements OnDestroy {
   private readonly authService = inject(AuthService);
   private readonly toast = inject(ToastService);
   readonly chatLockService = inject(ChatLockService);
+  private readonly offlineQueueService = inject(OfflineQueueService);
 
   @ViewChild('messageContainer') messageContainer!: ElementRef<HTMLDivElement>;
   @ViewChild('textInput') textInputRef!: ElementRef<HTMLInputElement>;
@@ -1491,7 +1493,7 @@ export class ChatDetailComponent implements OnDestroy {
       return null;
     }
 
-    if (c.isDeclined) {
+    if (c.isDeclined || (c.declineCount && c.declineCount >= 1 && (c.rawStatus === 'pending' || c.isPendingRequest))) {
       if (c.canSendExtraMessage) {
         return 'Request was declined. You can now send 1 more message.';
       }
@@ -1533,7 +1535,7 @@ export class ChatDetailComponent implements OnDestroy {
       return !this.chatId().startsWith('new-');
     }
     if (c.isIncomingRequest || c.isBlocked || c.isBlockedByThem) return true;
-    if (c.isDeclined) {
+    if (c.isDeclined || (c.declineCount && c.declineCount >= 1 && (c.rawStatus === 'pending' || c.isPendingRequest))) {
       return !c.canSendExtraMessage;
     }
     if (c.isPendingRequest) {
@@ -1556,7 +1558,7 @@ export class ChatDetailComponent implements OnDestroy {
     if (!c) return 'Type a message…';
     if (c.isIncomingRequest) return 'Accept invitation to reply…';
     if (c.isBlockedByThem) return "You can't message this person right now.";
-    if (c.isDeclined && !c.canSendExtraMessage) return 'Request declined. You can message again if they accept.';
+    if ((c.isDeclined || (c.declineCount && c.declineCount >= 1)) && !c.canSendExtraMessage) return 'Request declined. You can message again if they accept.';
     if (c.isPendingRequest && this.messages().length >= 1) return 'You can only send one message until they accept.';
     return 'Type a message…';
   });
@@ -1604,6 +1606,7 @@ export class ChatDetailComponent implements OnDestroy {
     });
 
     this.setupSocketListeners();
+    this.setupOfflineQueueListeners();
     document.addEventListener('visibilitychange', this.onVisibilityChange);
 
     this.expirationInterval = setInterval(() => {
@@ -1616,9 +1619,36 @@ export class ChatDetailComponent implements OnDestroy {
     }, 5000);
   }
 
+  private setupOfflineQueueListeners(): void {
+    this.subscriptions.push(
+      this.offlineQueueService.messageSent$.subscribe(({ item, message, permissions }) => {
+        if (item.conversationId === this.chatId()) {
+          const myId = this.authService.currentUser()?.id;
+          const formatted = formatMessageToChatMessage(message, myId);
+          this.upsertMessage(formatted, item.clientId);
+          this.scrollToBottom();
+          if (permissions) {
+            this.applyPermissions(permissions);
+          }
+        }
+      })
+    );
+
+    this.subscriptions.push(
+      this.offlineQueueService.messageFailed$.subscribe(({ item, error }) => {
+        if (item.conversationId === this.chatId()) {
+          this.messages.update((list) => list.filter((m) => m.id !== item.clientId && m.clientId !== item.clientId));
+          this.chat.update((c) => (c ? { ...c, canSendExtraMessage: false } : c));
+          this.handleMessageError(error);
+        }
+      })
+    );
+  }
+
   private onVisibilityChange = () => {
     const id = this.chatId();
     if (document.hidden) {
+      this.socketService.emit('conversation:view', { conversationId: null });
       this.conversationsService.activeConversationId.set(null);
       if (this.chat()?.isLocked || (id && this.chatLockService.isUnlocked(id))) {
         this.chatLockService.relock(id).subscribe();
@@ -1626,6 +1656,9 @@ export class ChatDetailComponent implements OnDestroy {
       }
     } else {
       if (id) {
+        if (!id.startsWith('new-')) {
+          this.socketService.emit('conversation:view', { conversationId: id });
+        }
         this.conversationsService.activeConversationId.set(id);
         if (this.chat()?.isLocked && !this.chatLockService.isUnlocked(id)) {
           this.messages.set([]);
@@ -1695,6 +1728,9 @@ export class ChatDetailComponent implements OnDestroy {
 
   loadConversation(id: string): void {
     this.loadError.set(null);
+    if (id && !id.startsWith('new-')) {
+      this.socketService.emit('conversation:view', { conversationId: id });
+    }
     const myId = this.authService.currentUser()?.id;
     const myAvatar = this.authService.currentUser()?.avatarUrl;
 
@@ -1729,6 +1765,30 @@ export class ChatDetailComponent implements OnDestroy {
       next: (res) => {
         const msgs = res.messages.map((m) => formatMessageToChatMessage(m, myId));
         this.messages.set(msgs);
+
+        // Merge offline queue items for this conversation so unsent messages don't vanish
+        this.offlineQueueService.getByConversation(id).then((queued) => {
+          if (queued.length > 0) {
+            const existingClientIds = new Set(this.messages().map((m) => m.clientId || m.id));
+            const queuedMsgs: ChatMessage[] = queued
+              .filter((q) => !existingClientIds.has(q.clientId))
+              .map((q) => ({
+                id: q.clientId,
+                clientId: q.clientId,
+                chatId: q.conversationId,
+                text: q.body,
+                sender: 'me' as const,
+                timestamp: q.createdAt,
+                timeString: new Date(q.createdAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+                status: 'pending' as const,
+                type: 'text' as const,
+              }));
+            if (queuedMsgs.length > 0) {
+              this.messages.update((list) => [...list, ...queuedMsgs]);
+            }
+          }
+        });
+
         this.scrollToBottom();
 
         // Mark as read
@@ -1942,6 +2002,9 @@ export class ChatDetailComponent implements OnDestroy {
     this.subscriptions.push(
       this.socketService.conversationUpdated$.subscribe((data) => {
         if (data.conversationId === this.chatId()) {
+          if ((data as any).permissions) {
+            this.applyPermissions((data as any).permissions);
+          }
           this.reloadConversationMetadata();
         }
       })
@@ -1982,6 +2045,17 @@ export class ChatDetailComponent implements OnDestroy {
         }
       })
     );
+  }
+
+  private applyPermissions(permissions: { canSend: boolean; reason?: string | null; remainingMessages?: number }): void {
+    this.chat.update((current) => {
+      if (!current) return current;
+      return {
+        ...current,
+        canSendExtraMessage: permissions.canSend,
+        isDeclined: permissions.reason === 'REQUEST_DECLINED' ? true : current.isDeclined,
+      };
+    });
   }
 
   private reloadConversationMetadata(): void {
@@ -2289,6 +2363,11 @@ export class ChatDetailComponent implements OnDestroy {
     this.upsertMessage(optimisticMsg);
     this.scrollToBottom();
 
+    // If sender is using their 1 extra message, disable composer right away
+    if (this.chat()?.canSendExtraMessage) {
+      this.chat.update((c) => (c ? { ...c, canSendExtraMessage: false } : c));
+    }
+
     if (!this.emojiPickerOpen()) {
       setTimeout(() => {
         this.textInputRef?.nativeElement?.focus();
@@ -2359,7 +2438,16 @@ export class ChatDetailComponent implements OnDestroy {
         this.router.navigate(['/chats', res.conversationId], { replaceUrl: true });
       },
       error: (err) => {
-        this.markMessageFailed(tempId);
+        const isPolicyError =
+          err?.status === 403 ||
+          ['REQUEST_PENDING_LIMIT', 'REQUEST_DECLINED', 'ATTACHMENTS_NOT_ALLOWED', 'USER_BLOCKED'].includes(
+            err?.error?.error?.code || err?.error?.code
+          );
+        if (isPolicyError) {
+          this.messages.update((list) => list.filter((m) => m.id !== tempId && m.clientId !== tempId));
+        } else {
+          this.markMessageFailed(tempId);
+        }
         this.handleMessageError(err);
       },
     });
@@ -2368,15 +2456,48 @@ export class ChatDetailComponent implements OnDestroy {
   private executeSendMessage(conversationId: string, payload: any, tempId?: string): void {
     const finalPayload = { ...payload, ...(tempId ? { clientId: tempId } : {}) };
     this.messagesService.sendMessage(conversationId, finalPayload).subscribe({
-      next: (msg) => {
+      next: (res) => {
         const myId = this.authService.currentUser()?.id;
-        const formatted = formatMessageToChatMessage(msg, myId);
+        const formatted = formatMessageToChatMessage(res.message, myId);
         this.upsertMessage(formatted, tempId);
         this.scrollToBottom();
+
+        if (tempId) {
+          void this.offlineQueueService.dequeue(tempId);
+        }
+
+        if (res.permissions) {
+          this.applyPermissions(res.permissions);
+        }
       },
       error: (err) => {
-        if (tempId) {
-          this.markMessageFailed(tempId);
+        const isPolicyError =
+          err?.status === 403 ||
+          ['REQUEST_PENDING_LIMIT', 'REQUEST_DECLINED', 'ATTACHMENTS_NOT_ALLOWED', 'USER_BLOCKED'].includes(
+            err?.error?.error?.code || err?.error?.code
+          );
+
+        if (isPolicyError) {
+          // Policy error: remove optimistic bubble so no "Retry" button appears
+          if (tempId) {
+            this.messages.update((list) => list.filter((m) => m.id !== tempId && m.clientId !== tempId));
+            void this.offlineQueueService.dequeue(tempId);
+          }
+          // Disable composer immediately
+          this.chat.update((c) => (c ? { ...c, canSendExtraMessage: false } : c));
+        } else {
+          // Network / 5xx error: mark failed (Retry button) and persist in IndexedDB offline queue
+          if (tempId) {
+            this.markMessageFailed(tempId);
+            if (!payload.attachmentUrl && payload.body) {
+              void this.offlineQueueService.enqueue({
+                clientId: tempId,
+                conversationId,
+                body: payload.body,
+                createdAt: new Date().toISOString(),
+              });
+            }
+          }
         }
         this.handleMessageError(err);
       },
@@ -2693,6 +2814,7 @@ export class ChatDetailComponent implements OnDestroy {
 
   ngOnDestroy(): void {
     document.removeEventListener('visibilitychange', this.onVisibilityChange);
+    this.socketService.emit('conversation:view', { conversationId: null });
     this.conversationsService.activeConversationId.set(null);
     const id = this.chatId();
     if (this.chat()?.isLocked || (id && this.chatLockService.isUnlocked(id))) {

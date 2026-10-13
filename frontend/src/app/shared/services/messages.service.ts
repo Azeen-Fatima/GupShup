@@ -19,6 +19,15 @@ export interface UploadAttachmentResult {
   height: number;
 }
 
+export interface SendMessageResult {
+  message: Message;
+  permissions?: {
+    canSend: boolean;
+    reason: string | null;
+    remainingMessages: number;
+  };
+}
+
 @Injectable({
   providedIn: 'root',
 })
@@ -63,14 +72,20 @@ export class MessagesService {
       attachmentName?: string;
       attachmentSize?: string;
       attachmentMime?: string;
+      clientId?: string;
     }
-  ): Observable<Message> {
+  ): Observable<SendMessageResult> {
     return this.http
-      .post<ApiResponse<{ message: Message }>>(
+      .post<ApiResponse<{ message: Message; permissions?: any }>>(
         `${this.baseUrl}/${conversationId}/messages`,
         data
       )
-      .pipe(map((res) => res.data!.message));
+      .pipe(
+        map((res) => ({
+          message: res.data!.message,
+          permissions: res.data?.permissions,
+        }))
+      );
   }
 
   /**

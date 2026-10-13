@@ -8,6 +8,7 @@ import { AuthService } from '../../../shared/services/auth.service';
 import { ConversationsService } from '../../../shared/services/conversations.service';
 import { AppTheme, ThemeService } from '../../../shared/services/theme.service';
 import { ToastService } from '../../../shared/services/toast.service';
+import { PushNotificationService } from '../../../shared/services/push-notification.service';
 import { BlockedItem, DeclinedItem, getInitials } from '../../../shared/models/api.models';
 import { processAvatarImage } from '../../../shared/utils/image-processor';
 import { AvatarComponent } from '../../../shared/components/avatar/avatar.component';
@@ -249,6 +250,31 @@ import { EmptyStateComponent } from '../../../shared/components/empty-state/empt
             [attr.aria-checked]="currentTheme() === 'black'"
           >
             Black
+          </button>
+        </div>
+
+        <!-- Notifications -->
+        <div class="section-title">Notifications</div>
+        <p class="section-hint">Get notified about new messages and requests even when the app is closed</p>
+
+        <div class="toggle-card">
+          <div class="toggle-card-info">
+            <span class="toggle-card-title">Push notifications</span>
+            <span class="toggle-card-desc">
+              {{ pushService.pushEnabled() ? 'Active on this browser' : 'Disabled' }}
+            </span>
+          </div>
+          <button
+            type="button"
+            class="switch-btn"
+            [class.active]="pushService.pushEnabled()"
+            [disabled]="isTogglingPush()"
+            (click)="togglePush()"
+            role="switch"
+            [attr.aria-checked]="pushService.pushEnabled()"
+            aria-label="Toggle push notifications"
+          >
+            <span class="switch-thumb"></span>
           </button>
         </div>
 
@@ -711,6 +737,78 @@ import { EmptyStateComponent } from '../../../shared/components/empty-state/empt
       }
     }
 
+    /* Notification Toggle Card */
+    .toggle-card {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 13px 14px;
+      background: var(--input);
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      margin: 8px 0 16px;
+    }
+
+    .toggle-card-info {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+
+    .toggle-card-title {
+      font-size: 13.5px;
+      font-weight: 700;
+      color: var(--ink);
+    }
+
+    .toggle-card-desc {
+      font-size: 11.5px;
+      color: var(--muted);
+    }
+
+    .switch-btn {
+      width: 46px;
+      height: 26px;
+      border-radius: 13px;
+      background: var(--border);
+      border: none;
+      cursor: pointer;
+      position: relative;
+      transition: background-color 0.2s ease;
+      outline: none;
+      flex-shrink: 0;
+
+      &.active {
+        background: var(--amber);
+      }
+
+      &:focus-visible {
+        outline: 2px solid var(--amber);
+        outline-offset: 2px;
+      }
+
+      &:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+      }
+    }
+
+    .switch-thumb {
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      background: #FFFFFF;
+      position: absolute;
+      top: 3px;
+      left: 3px;
+      transition: transform 0.2s ease;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+    }
+
+    .switch-btn.active .switch-thumb {
+      transform: translateX(20px);
+    }
+
     .logout-wrap {
       margin-top: 32px;
     }
@@ -769,6 +867,8 @@ export class SettingsComponent implements OnInit {
   private readonly conversationsService = inject(ConversationsService);
   private readonly themeService = inject(ThemeService);
   private readonly toast = inject(ToastService);
+  readonly pushService = inject(PushNotificationService);
+  readonly isTogglingPush = signal<boolean>(false);
 
   readonly getInitials = getInitials;
 
@@ -878,6 +978,28 @@ export class SettingsComponent implements OnInit {
   isInvalid(controlName: string): boolean {
     const ctrl = this.profileForm.get(controlName);
     return !!(ctrl && ctrl.invalid && (ctrl.dirty || ctrl.touched));
+  }
+
+  async togglePush(): Promise<void> {
+    this.isTogglingPush.set(true);
+    try {
+      const success = await this.pushService.toggle();
+      if (success) {
+        if (this.pushService.pushEnabled()) {
+          this.toast.success('Push notifications enabled');
+        } else {
+          this.toast.info('Push notifications disabled');
+        }
+      } else {
+        if (this.pushService.permission() === 'denied') {
+          this.toast.error('Notifications are blocked by your browser settings');
+        } else {
+          this.toast.error('Failed to update push notifications');
+        }
+      }
+    } finally {
+      this.isTogglingPush.set(false);
+    }
   }
 
   isSaveDisabled(): boolean {

@@ -264,18 +264,31 @@ export class AuthService {
   }
 
   /**
-   * Revoke refresh token on logout
+   * Revoke refresh token on logout and optionally clean up push subscription
    */
-  async logout(rawRefreshToken?: string): Promise<void> {
-    if (!rawRefreshToken) return;
+  async logout(rawRefreshToken?: string, pushEndpoint?: string): Promise<void> {
+    if (!rawRefreshToken) {
+      if (pushEndpoint) {
+        await prisma.pushSubscription.deleteMany({ where: { endpoint: pushEndpoint } }).catch(() => {});
+      }
+      return;
+    }
     try {
       const payload = verifyRefreshToken(rawRefreshToken);
       await prisma.refreshToken.updateMany({
         where: { id: payload.tokenId, revokedAt: null },
         data: { revokedAt: new Date() },
       });
+      if (pushEndpoint) {
+        await prisma.pushSubscription.deleteMany({
+          where: { userId: payload.userId, endpoint: pushEndpoint },
+        }).catch(() => {});
+      }
     } catch {
       // Best-effort logout: ignore verification errors
+      if (pushEndpoint) {
+        await prisma.pushSubscription.deleteMany({ where: { endpoint: pushEndpoint } }).catch(() => {});
+      }
     }
   }
 

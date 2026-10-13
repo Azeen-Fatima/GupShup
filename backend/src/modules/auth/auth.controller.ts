@@ -108,7 +108,8 @@ export class AuthController {
   async logout(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const token = req.cookies?.[REFRESH_COOKIE_NAME] || req.body?.refreshToken;
-      await authService.logout(token);
+      const pushEndpoint = (req.body?.pushEndpoint as string) || (req.headers['x-push-endpoint'] as string);
+      await authService.logout(token, pushEndpoint);
       res.clearCookie(REFRESH_COOKIE_NAME, getClearCookieOptions());
       sendSuccess(res, { message: 'Logged out successfully' });
     } catch (err) {

@@ -8,6 +8,7 @@ import { presenceService } from '../presence/presence.service';
 import { emitToUser } from '../../sockets';
 import { CreateConversationInput } from './conversations.schemas';
 import { chatLockService } from '../chatLock/chatLock.service';
+import { pushService } from '../push/push.service';
 
 export class ConversationsService {
   /**
@@ -157,6 +158,8 @@ export class ConversationsService {
             (msg) => conv.declinedAt && msg.createdAt > conv.declinedAt && msg.senderId === userId
           ).length;
           canSendExtraMessage = sentAfterDecline === 0;
+        } else if (conv.status === 'pending' && conv.requesterId === userId && conv.declineCount >= 1) {
+          canSendExtraMessage = false;
         }
 
         // Filter messages respecting clearedAt
@@ -343,6 +346,19 @@ export class ConversationsService {
         },
       });
       canSendExtraMessage = extraSent === 0;
+    } else if (conv.status === 'pending' && conv.requesterId === userId && conv.declineCount >= 1) {
+      canSendExtraMessage = false;
+    }
+
+    let canSend = true;
+    if (conv.status === 'accepted' || isSelf) {
+      canSend = true;
+    } else if (isBlockedByMe || effectiveBlockedByThem) {
+      canSend = false;
+    } else if (conv.status === 'declined') {
+      canSend = conv.requesterId === userId ? canSendExtraMessage : true;
+    } else if (conv.status === 'pending') {
+      canSend = conv.requesterId === userId ? (conv.declineCount >= 1 ? false : true) : true;
     }
 
     const showPresence = isSelf || conv.status === 'accepted';
@@ -363,6 +379,7 @@ export class ConversationsService {
       declineCount: conv.declineCount,
       declinedAt: conv.declinedAt,
       canSendExtraMessage,
+      canSend,
       requesterId: conv.requesterId,
       createdAt: conv.createdAt,
       lastMessageAt: conv.lastMessageAt,
@@ -693,6 +710,20 @@ export class ConversationsService {
           conversationId,
           message,
         });
+        void pushService.notifyMessageRequest({
+          conversationId,
+          sender: message.sender,
+          recipientId,
+        }).catch(() => {});
+      } else {
+        void pushService.notifyNewMessage({
+          conversationId,
+          sender: message.sender,
+          recipientId,
+          type: message.type,
+          body: message.body,
+          isLocked: recipientLockedSender,
+        }).catch(() => {});
       }
 
       emitToUser(recipientId, 'conversation:updated', {
@@ -779,6 +810,20 @@ export class ConversationsService {
           lastSeen: otherLastSeen,
         });
       });
+
+      // Web Push notification
+      prisma.user.findUnique({
+        where: { id: userId },
+        select: { id: true, name: true },
+      }).then((user) => {
+        if (user) {
+          void pushService.notifyRequestAccepted({
+            conversationId,
+            otherUser: user,
+            recipientId: otherMember.userId,
+          }).catch(() => {});
+        }
+      }).catch(() => {});
     }
 
     emitToUser(userId, 'request:accepted', {
@@ -849,6 +894,20 @@ export class ConversationsService {
         isOnline: false,
         lastSeen: null,
       });
+
+      // Web Push notification
+      prisma.user.findUnique({
+        where: { id: userId },
+        select: { id: true, name: true },
+      }).then((user) => {
+        if (user) {
+          void pushService.notifyRequestDeclined({
+            conversationId,
+            otherUser: user,
+            recipientId: otherMember.userId,
+          }).catch(() => {});
+        }
+      }).catch(() => {});
     }
 
     emitToUser(userId, 'request:declined', {

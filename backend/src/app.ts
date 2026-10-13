@@ -16,6 +16,7 @@ import usersRouter from './modules/users/users.routes';
 import conversationsRouter from './modules/conversations/conversations.routes';
 import uploadsRouter from './modules/uploads/uploads.routes';
 import chatLockRouter from './modules/chatLock/chatLock.routes';
+import pushRouter from './modules/push/push.routes';
 
 const app = express();
 
@@ -114,6 +115,8 @@ app.use('/api/v1/users', usersRouter);
 app.use('/api/v1/conversations', conversationsRouter);
 app.use('/api/v1/uploads', uploadsRouter);
 app.use('/api/v1/chat-lock', chatLockRouter);
+app.use('/api/v1/push', pushRouter);
+app.use('/push', pushRouter);
 
 // 404 handler
 app.use((req: Request, _res: Response, next: NextFunction) => {

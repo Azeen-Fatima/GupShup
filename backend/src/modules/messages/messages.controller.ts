@@ -23,12 +23,12 @@ export class MessagesController {
   async sendMessage(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const convId = String(req.params.id);
-      const message = await messagesService.sendMessage(
+      const result = await messagesService.sendMessage(
         convId,
         req.user!.userId,
         req.body
       );
-      sendSuccess(res, { message }, 201);
+      sendSuccess(res, result, 201);
     } catch (err) {
       next(err);
     }

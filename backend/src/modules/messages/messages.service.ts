@@ -4,8 +4,120 @@ import { emitToUser } from '../../sockets';
 import { SendMessageInput, GetMessagesQueryInput } from './messages.schemas';
 import { chatLockService } from '../chatLock/chatLock.service';
 import { verifyUnlockToken } from '../../utils/token';
+import { pushService } from '../push/push.service';
 
 export class MessagesService {
+  /**
+   * Calculate sender permissions for composer state
+   */
+  async getSenderPermissions(
+    conversationId: string,
+    userId: string
+  ): Promise<{
+    canSend: boolean;
+    reason: string | null;
+    remainingMessages: number;
+  }> {
+    const conv = await prisma.conversation.findUnique({
+      where: { id: conversationId },
+      select: {
+        id: true,
+        status: true,
+        userAId: true,
+        userBId: true,
+        requesterId: true,
+        declineCount: true,
+        declinedAt: true,
+        wasAccepted: true,
+      },
+    });
+
+    if (!conv) {
+      return { canSend: false, reason: 'CONVERSATION_NOT_FOUND', remainingMessages: 0 };
+    }
+
+    const isSelf = conv.userAId === conv.userBId;
+    if (isSelf) {
+      return { canSend: true, reason: null, remainingMessages: 999 };
+    }
+
+    const otherUserId = conv.userAId === userId ? conv.userBId : conv.userAId;
+
+    const blocks = await prisma.block.findMany({
+      where: {
+        OR: [
+          { blockerId: userId, blockedId: otherUserId },
+          { blockerId: otherUserId, blockedId: userId },
+        ],
+      },
+    });
+
+    const iBlocked = blocks.some((b) => b.blockerId === userId);
+    const otherBlockedMe = blocks.some((b) => b.blockerId === otherUserId);
+
+    if (iBlocked) {
+      return { canSend: false, reason: 'USER_BLOCKED', remainingMessages: 0 };
+    }
+
+    if (otherBlockedMe) {
+      if (conv.status === 'blocked' && !conv.wasAccepted) {
+        const count = await prisma.message.count({
+          where: { conversationId, senderId: userId },
+        });
+        if (count >= 1) {
+          return { canSend: false, reason: 'REQUEST_PENDING_LIMIT', remainingMessages: 0 };
+        }
+        return { canSend: true, reason: null, remainingMessages: 1 };
+      }
+      return { canSend: false, reason: 'USER_BLOCKED', remainingMessages: 0 };
+    }
+
+    if (conv.status === 'blocked') {
+      return { canSend: false, reason: 'USER_BLOCKED', remainingMessages: 0 };
+    }
+
+    if (conv.status === 'declined') {
+      if (conv.requesterId === userId) {
+        if (conv.declineCount >= 2) {
+          return { canSend: false, reason: 'REQUEST_DECLINED', remainingMessages: 0 };
+        }
+        const extraSent = await prisma.message.count({
+          where: {
+            conversationId,
+            senderId: userId,
+            ...(conv.declinedAt ? { createdAt: { gt: conv.declinedAt } } : {}),
+          },
+        });
+        if (extraSent >= 1) {
+          return { canSend: false, reason: 'REQUEST_DECLINED', remainingMessages: 0 };
+        }
+        return { canSend: true, reason: null, remainingMessages: 1 };
+      }
+      return { canSend: true, reason: null, remainingMessages: 999 };
+    }
+
+    if (conv.status === 'pending') {
+      if (conv.requesterId === userId) {
+        if (conv.declineCount >= 1) {
+          return { canSend: false, reason: 'REQUEST_DECLINED', remainingMessages: 0 };
+        }
+        const count = await prisma.message.count({
+          where: { conversationId, senderId: userId },
+        });
+        if (count >= 1) {
+          return { canSend: false, reason: 'REQUEST_PENDING_LIMIT', remainingMessages: 0 };
+        }
+        return { canSend: true, reason: null, remainingMessages: 1 };
+      }
+      return { canSend: true, reason: null, remainingMessages: 999 };
+    }
+
+    if (conv.status === 'accepted') {
+      return { canSend: true, reason: null, remainingMessages: 999 };
+    }
+
+    return { canSend: false, reason: 'CONVERSATION_BLOCKED', remainingMessages: 0 };
+  }
   /**
    * Get paginated messages for a conversation
    */
@@ -132,7 +244,8 @@ export class MessagesService {
         },
       });
       if (existing) {
-        return existing;
+        const permissions = await this.getSenderPermissions(conversationId, userId);
+        return { message: existing, permissions };
       }
     }
 
@@ -221,7 +334,8 @@ export class MessagesService {
             message: silentMessage,
           });
 
-          return silentMessage;
+          const permissions = await this.getSenderPermissions(conversationId, userId);
+          return { message: silentMessage, permissions };
         }
 
         throw new ForbiddenError("You can't message this person right now.", 'USER_BLOCKED');
@@ -274,6 +388,17 @@ export class MessagesService {
             data: { status: 'accepted', wasAccepted: true },
           });
           emitToUser(conv.requesterId, 'request:accepted', { conversationId });
+          const user = await prisma.user.findUnique({
+            where: { id: userId },
+            select: { id: true, name: true },
+          });
+          if (user) {
+            void pushService.notifyRequestAccepted({
+              conversationId,
+              otherUser: user,
+              recipientId: conv.requesterId,
+            }).catch(() => {});
+          }
         }
       } else if (conv.status === 'pending') {
         if (conv.requesterId === userId) {
@@ -282,6 +407,12 @@ export class MessagesService {
           });
 
           if (sentCount >= 1) {
+            if (conv.declineCount >= 1) {
+              throw new ForbiddenError(
+                'Request declined. You can message again if they accept.',
+                'REQUEST_DECLINED'
+              );
+            }
             throw new ForbiddenError(
               'You can only send 1 message until your request is accepted',
               'REQUEST_PENDING_LIMIT'
@@ -294,6 +425,17 @@ export class MessagesService {
             data: { status: 'accepted', wasAccepted: true },
           });
           emitToUser(conv.requesterId, 'request:accepted', { conversationId });
+          const user = await prisma.user.findUnique({
+            where: { id: userId },
+            select: { id: true, name: true },
+          });
+          if (user) {
+            void pushService.notifyRequestAccepted({
+              conversationId,
+              otherUser: user,
+              recipientId: conv.requesterId,
+            }).catch(() => {});
+          }
         }
       }
     }
@@ -368,16 +510,37 @@ export class MessagesService {
       });
     }
 
+    const permissions = await this.getSenderPermissions(conversationId, userId);
+
     emitToUser(otherUserId, 'conversation:updated', { conversationId });
+    emitToUser(userId, 'conversation:updated', { conversationId, permissions });
 
     if (otherUserId !== userId) {
       emitToUser(userId, 'message:new', {
         conversationId,
         message,
       });
+
+      // Async Web Push notification
+      if (conv.status === 'pending' && conv.declineCount === 0 && !conv.lastMessageAt) {
+        void pushService.notifyMessageRequest({
+          conversationId,
+          sender: message.sender,
+          recipientId: otherUserId,
+        }).catch(() => {});
+      } else {
+        void pushService.notifyNewMessage({
+          conversationId,
+          sender: message.sender,
+          recipientId: otherUserId,
+          type: message.type,
+          body: message.body,
+          isLocked: otherLockedMe,
+        }).catch(() => {});
+      }
     }
 
-    return message;
+    return { message, permissions };
   }
 
   /**

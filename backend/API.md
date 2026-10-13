@@ -410,7 +410,38 @@ Drops active unlock state and relocks conversation (or all conversations).
 
 ---
 
-## 8. Real-Time Socket.io Events
+## 8. Web Push Notifications (`/api/v1/push` and `/push`)
+
+### `GET /public-key`
+Returns VAPID public key.
+- **Auth**: None / Optional
+- **Response**: `{ "success": true, "data": { "publicKey": "..." } }`
+
+### `POST /subscribe`
+Registers or updates a browser device push subscription.
+- **Auth**: Bearer token
+- **Body**:
+```json
+{
+  "endpoint": "https://fcm.googleapis.com/fcm/send/...",
+  "keys": {
+    "p256dh": "...",
+    "auth": "..."
+  },
+  "userAgent": "Mozilla/5.0..."
+}
+```
+- **Response**: `{ "success": true, "message": "Push subscription registered" }`
+
+### `DELETE /unsubscribe`
+Removes push subscription for current user (auto-called on toggle off, logout, or 404/410 push failure).
+- **Auth**: Bearer token
+- **Body**: `{ "endpoint"?: "https://..." }`
+- **Response**: `{ "success": true, "message": "Push subscription removed" }`
+
+---
+
+## 9. Real-Time Socket.io Events
 
 ### Connection & Auth
 Pass JWT token via auth handshake or Authorization header. Fallback transports `['polling', 'websocket']`:
@@ -428,6 +459,7 @@ const socket = io('http://localhost:3000', {
 | Event | Payload | Description |
 |---|---|---|
 | `presence:heartbeat` | None | Refreshes user online TTL (every 25s) |
+| `conversation:view` | `{ "conversationId": "uuid" \| null }` | Tracks active conversation view for push notification suppression |
 | `message:delivered` | `{ "messageId"?: string, "conversationId"?: string, "clientId"?: string }` | Acknowledges message receipt by recipient |
 | `message:read` | `{ "conversationId": "uuid" }` | Acknowledges message read by recipient |
 | `typing:start` | `{ "conversationId": "uuid" }` | Sets typing status (accepted chats only) |
@@ -446,6 +478,6 @@ const socket = io('http://localhost:3000', {
 | `request:new` | `{ "conversationId": "uuid" }` | Delivered to recipient when a new chat request is received |
 | `request:accepted` | `{ "conversationId": "uuid" }` | Delivered when a pending request is accepted |
 | `request:declined` | `{ "conversationId": "uuid", "declineCount": number }` | Delivered when a chat request is declined |
-| `conversation:updated`| `{ "conversationId": "uuid", "disappearingMode"?: string, ... }` | Delivered on accept, decline, block, disappearing change, unhide, etc. |
+| `conversation:updated`| `{ "conversationId": "uuid", "permissions"?: { "canSend": boolean, "reason": string|null, "remainingMessages": number } }` | Delivered on state updates |
 | `user:updated` | `{ "id": "uuid", "name": "string", "avatarUrl": "string|null", "bio": "string|null", "statusMessage": "string|null" }` | Delivered to conversation partners when a user updates profile or avatar |
 

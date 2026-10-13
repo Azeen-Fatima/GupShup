@@ -253,6 +253,15 @@ export class SocketService implements OnDestroy {
     }
   }
 
+  /**
+   * Emit arbitrary socket event if connected
+   */
+  emit(event: string, data?: any): void {
+    if (this.socket?.connected) {
+      this.socket.emit(event, data);
+    }
+  }
+
   private clearHeartbeat(): void {
     if (this.heartbeatInterval) {
       clearInterval(this.heartbeatInterval);

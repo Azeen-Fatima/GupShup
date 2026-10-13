@@ -100,6 +100,9 @@ npm start
    - `CLOUDINARY_API_KEY`: Cloudinary API key
    - `CLOUDINARY_API_SECRET`: Cloudinary API secret
    - `OTP_TTL_SECONDS`: `600`
+   - `VAPID_PUBLIC_KEY`: Web Push VAPID public key
+   - `VAPID_PRIVATE_KEY`: Web Push VAPID private key
+   - `VAPID_SUBJECT`: Web Push VAPID subject (e.g. `mailto:azeenfatima614@gmail.com`)
 
 3. **Database Migrations**:
    Run schema migrations safely during deployment via:
