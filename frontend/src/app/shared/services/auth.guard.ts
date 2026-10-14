@@ -19,10 +19,19 @@ export const authGuard: CanActivateFn = (route, state) => {
         if (token) {
           return true;
         }
+        // If refresh failed (e.g. offline) but user has saved profile locally, allow offline entry
+        if (authService.hasLocalUser()) {
+          return true;
+        }
         router.navigate(['/login']);
         return false;
       })
     );
+  }
+
+  // Allow offline access if user has local profile
+  if (authService.hasLocalUser()) {
+    return true;
   }
 
   router.navigate(['/login']);
@@ -33,7 +42,7 @@ export const guestGuard: CanActivateFn = (route, state) => {
   const authService = inject(AuthService);
   const router = inject(Router);
 
-  if (authService.isAuthenticated()) {
+  if (authService.isAuthenticated() || authService.hasLocalUser()) {
     router.navigate(['/chats']);
     return false;
   }
@@ -42,7 +51,7 @@ export const guestGuard: CanActivateFn = (route, state) => {
     authService.isInitialized.set(true);
     return authService.refreshSession().pipe(
       map((token) => {
-        if (token) {
+        if (token || authService.hasLocalUser()) {
           router.navigate(['/chats']);
           return false;
         }

@@ -22,6 +22,7 @@ import { AuthService } from '../../../shared/services/auth.service';
 import { ToastService } from '../../../shared/services/toast.service';
 import { ChatLockService } from '../../../shared/services/chat-lock.service';
 import { OfflineQueueService } from '../../../shared/services/offline-queue.service';
+import { OfflineCacheService } from '../../../shared/services/offline-cache.service';
 import {
   formatConversationToChatItem,
   formatMessageToChatMessage,
@@ -1446,6 +1447,7 @@ export class ChatDetailComponent implements OnDestroy {
   private readonly toast = inject(ToastService);
   readonly chatLockService = inject(ChatLockService);
   private readonly offlineQueueService = inject(OfflineQueueService);
+  private readonly offlineCacheService = inject(OfflineCacheService);
 
   @ViewChild('messageContainer') messageContainer!: ElementRef<HTMLDivElement>;
   @ViewChild('textInput') textInputRef!: ElementRef<HTMLInputElement>;
@@ -1466,6 +1468,11 @@ export class ChatDetailComponent implements OnDestroy {
 
   readonly chat = signal<ChatItem | null>(null);
   readonly messages = signal<ChatMessage[]>([]);
+  readonly permissions = signal<{
+    canSend: boolean;
+    reason: string | null;
+    remainingMessages: number;
+  } | null>(null);
 
   readonly unlockPinInput = signal<string>('');
   readonly unlockPinError = signal<string>('');
@@ -1488,24 +1495,18 @@ export class ChatDetailComponent implements OnDestroy {
   });
 
   readonly senderComposerNote = computed(() => {
-    const c = this.chat();
-    if (!c || c.isSelfNotes || c.isIncomingRequest || c.isBlocked || c.isBlockedByThem) {
-      return null;
-    }
+    const p = this.permissions();
+    if (!p) return null;
 
-    if (c.isDeclined || (c.declineCount && c.declineCount >= 1 && (c.rawStatus === 'pending' || c.isPendingRequest))) {
-      if (c.canSendExtraMessage) {
-        return 'Request was declined. You can now send 1 more message.';
-      }
+    if (p.reason === 'REQUEST_PENDING_LIMIT') {
+      return 'You can only send one message until they accept.';
+    }
+    if (p.reason === 'REQUEST_DECLINED_EXTRA') {
+      return 'Request declined. You can send 1 more message.';
+    }
+    if (p.reason === 'REQUEST_DECLINED') {
       return 'Request declined. You can message again if they accept.';
     }
-
-    if (c.isPendingRequest) {
-      if (this.messages().length >= 1) {
-        return `Waiting for ${c.name} to accept your request. You can only send one message until they accept.`;
-      }
-    }
-
     return null;
   });
 
@@ -1531,21 +1532,22 @@ export class ChatDetailComponent implements OnDestroy {
   readonly isTypingDisabled = computed(() => {
     if (this.isChatLockedAndProtected()) return true;
     const c = this.chat();
-    if (!c) {
-      return !this.chatId().startsWith('new-');
-    }
-    if (c.isIncomingRequest || c.isBlocked || c.isBlockedByThem) return true;
-    if (c.isDeclined || (c.declineCount && c.declineCount >= 1 && (c.rawStatus === 'pending' || c.isPendingRequest))) {
-      return !c.canSendExtraMessage;
-    }
-    if (c.isPendingRequest) {
-      return this.messages().length >= 1;
+    if (c?.isIncomingRequest || c?.isBlocked || c?.isBlockedByThem) return true;
+
+    const p = this.permissions();
+    if (p) {
+      return !p.canSend;
     }
     return false;
   });
 
   readonly isAttachDisabled = computed(() => {
-    return this.isTypingDisabled();
+    if (this.isTypingDisabled()) return true;
+    const c = this.chat();
+    if (c && (c.rawStatus === 'pending' || c.rawStatus === 'declined')) return true;
+    const p = this.permissions();
+    if (p && p.remainingMessages <= 1 && p.reason !== null) return true;
+    return false;
   });
 
   readonly isSendDisabled = computed(() => {
@@ -1555,11 +1557,19 @@ export class ChatDetailComponent implements OnDestroy {
 
   readonly composerPlaceholder = computed(() => {
     const c = this.chat();
-    if (!c) return 'Type a message…';
-    if (c.isIncomingRequest) return 'Accept invitation to reply…';
-    if (c.isBlockedByThem) return "You can't message this person right now.";
-    if ((c.isDeclined || (c.declineCount && c.declineCount >= 1)) && !c.canSendExtraMessage) return 'Request declined. You can message again if they accept.';
-    if (c.isPendingRequest && this.messages().length >= 1) return 'You can only send one message until they accept.';
+    if (c?.isIncomingRequest) return 'Accept request to reply…';
+    if (c?.isBlockedByThem) return "You can't message this person right now.";
+
+    const p = this.permissions();
+    if (p) {
+      if (!p.canSend && (p.reason === 'REQUEST_DECLINED' || p.reason === 'REQUEST_PENDING_LIMIT')) {
+        return "Can't send until they accept";
+      }
+      if (!p.canSend && (p.reason === 'USER_BLOCKED' || p.reason === 'CONVERSATION_BLOCKED')) {
+        return "You can't message this person right now.";
+      }
+    }
+
     return 'Type a message…';
   });
 
@@ -1590,6 +1600,8 @@ export class ChatDetailComponent implements OnDestroy {
       const id = params.get('id');
       if (id) {
         this.chatId.set(id);
+        this.chat.set(null);
+        this.permissions.set(null);
         this.conversationsService.activeConversationId.set(id);
         this.pendingAttachment.set(null);
         this.pendingAttachmentFile.set(null);
@@ -1675,6 +1687,7 @@ export class ChatDetailComponent implements OnDestroy {
   private setupDraftChat(targetUserId: string): void {
     this.messages.set([]);
     this.loadError.set(null);
+    this.permissions.set({ canSend: true, reason: null, remainingMessages: 1 });
 
     // 1. Immediately hydrate from cache if available (e.g. clicked from Find People)
     const cached = this.usersService.getDraftUser();
@@ -1734,11 +1747,37 @@ export class ChatDetailComponent implements OnDestroy {
     const myId = this.authService.currentUser()?.id;
     const myAvatar = this.authService.currentUser()?.avatarUrl;
 
-    // Load conversation metadata
+    // 1. Stale-while-revalidate: Load from local IndexedDB cache first
+    if (myId) {
+      void this.offlineCacheService.getConversation(myId, id).then(async (cachedConv) => {
+        if (cachedConv && this.chatId() === id) {
+          const item = formatConversationToChatItem(cachedConv, myId, myAvatar);
+          this.chat.set(item);
+          if (cachedConv.permissions) {
+            this.applyPermissions(cachedConv.permissions);
+          }
+          if (!item.isLocked) {
+            const cachedMessages = await this.offlineCacheService.getMessages(myId, id);
+            if (cachedMessages && cachedMessages.length > 0 && this.chatId() === id) {
+              const msgs = cachedMessages.map((m) => formatMessageToChatMessage(m, myId));
+              this.messages.set(msgs);
+              this.mergeQueuedMessages(id);
+              this.scrollToBottom();
+            }
+          }
+        }
+      });
+    }
+
+    // 2. Fetch fresh conversation metadata from backend
     this.conversationsService.getConversationById(id).subscribe({
       next: (conv) => {
+        if (this.chatId() !== id) return;
         const item = formatConversationToChatItem(conv, myId, myAvatar);
         this.chat.set(item);
+        if (conv.permissions) {
+          this.applyPermissions(conv.permissions);
+        }
 
         if (item.isLocked && !this.chatLockService.isUnlocked(id)) {
           this.messages.set([]);
@@ -1752,7 +1791,7 @@ export class ChatDetailComponent implements OnDestroy {
           this.loadError.set('not_found');
           this.toast.error('Conversation not found');
           this.router.navigate(['/chats']);
-        } else {
+        } else if (!this.chat()) {
           this.loadError.set('error');
         }
       },
@@ -1763,32 +1802,16 @@ export class ChatDetailComponent implements OnDestroy {
     const myId = this.authService.currentUser()?.id;
     this.messagesService.getMessages(id).subscribe({
       next: (res) => {
+        if (this.chatId() !== id) return;
         const msgs = res.messages.map((m) => formatMessageToChatMessage(m, myId));
         this.messages.set(msgs);
 
-        // Merge offline queue items for this conversation so unsent messages don't vanish
-        this.offlineQueueService.getByConversation(id).then((queued) => {
-          if (queued.length > 0) {
-            const existingClientIds = new Set(this.messages().map((m) => m.clientId || m.id));
-            const queuedMsgs: ChatMessage[] = queued
-              .filter((q) => !existingClientIds.has(q.clientId))
-              .map((q) => ({
-                id: q.clientId,
-                clientId: q.clientId,
-                chatId: q.conversationId,
-                text: q.body,
-                sender: 'me' as const,
-                timestamp: q.createdAt,
-                timeString: new Date(q.createdAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
-                status: 'pending' as const,
-                type: 'text' as const,
-              }));
-            if (queuedMsgs.length > 0) {
-              this.messages.update((list) => [...list, ...queuedMsgs]);
-            }
-          }
-        });
+        // Cache messages if chat is not locked
+        if (myId && !this.chat()?.isLocked) {
+          void this.offlineCacheService.saveMessages(myId, id, res.messages, false);
+        }
 
+        this.mergeQueuedMessages(id);
         this.scrollToBottom();
 
         // Mark as read
@@ -1804,6 +1827,30 @@ export class ChatDetailComponent implements OnDestroy {
           this.loadError.set('error');
         }
       },
+    });
+  }
+
+  private mergeQueuedMessages(id: string): void {
+    this.offlineQueueService.getByConversation(id).then((queued) => {
+      if (queued.length > 0 && this.chatId() === id) {
+        const existingClientIds = new Set(this.messages().map((m) => m.clientId || m.id));
+        const queuedMsgs: ChatMessage[] = queued
+          .filter((q) => !existingClientIds.has(q.clientId))
+          .map((q) => ({
+            id: q.clientId,
+            clientId: q.clientId,
+            chatId: q.conversationId,
+            text: q.body,
+            sender: 'me' as const,
+            timestamp: q.createdAt,
+            timeString: new Date(q.createdAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+            status: 'pending' as const,
+            type: 'text' as const,
+          }));
+        if (queuedMsgs.length > 0) {
+          this.messages.update((list) => [...list, ...queuedMsgs]);
+        }
+      }
     });
   }
 
@@ -2048,6 +2095,11 @@ export class ChatDetailComponent implements OnDestroy {
   }
 
   private applyPermissions(permissions: { canSend: boolean; reason?: string | null; remainingMessages?: number }): void {
+    this.permissions.set({
+      canSend: permissions.canSend,
+      reason: permissions.reason ?? null,
+      remainingMessages: permissions.remainingMessages ?? (permissions.canSend ? 999 : 0),
+    });
     this.chat.update((current) => {
       if (!current) return current;
       return {
@@ -2066,6 +2118,9 @@ export class ChatDetailComponent implements OnDestroy {
     this.conversationsService.getConversationById(id).subscribe({
       next: (conv) => {
         this.chat.set(formatConversationToChatItem(conv, myId, myAvatar));
+        if (conv.permissions) {
+          this.applyPermissions(conv.permissions);
+        }
       },
       error: () => {},
     });
@@ -2278,6 +2333,10 @@ export class ChatDetailComponent implements OnDestroy {
 
   triggerFileInput(type: 'image' | 'file'): void {
     this.attachMenuOpen.set(false);
+    if (!navigator.onLine) {
+      this.toast.info("You're offline. Attachments cannot be sent while offline.");
+      return;
+    }
     if (this.isChatPendingOrLimited()) {
       this.toast.info('Attachments are not allowed until your chat request is accepted.');
       return;
@@ -2293,6 +2352,12 @@ export class ChatDetailComponent implements OnDestroy {
     const input = event.target as HTMLInputElement;
     const file = input.files?.[0];
     if (!file) return;
+
+    if (!navigator.onLine) {
+      this.toast.info("You're offline. Attachments cannot be sent while offline.");
+      input.value = '';
+      return;
+    }
 
     if (this.isChatPendingOrLimited()) {
       this.toast.info('Attachments are not allowed until your chat request is accepted.');
@@ -2378,6 +2443,12 @@ export class ChatDetailComponent implements OnDestroy {
     if (currentId.startsWith('new-')) {
       const recipientId = currentId.replace('new-', '');
 
+      if (!navigator.onLine) {
+        this.messages.update((list) => list.filter((m) => m.id !== tempId && m.clientId !== tempId));
+        this.toast.info("You're offline. Reconnect to the internet to start a new chat.");
+        return;
+      }
+
       if (attFile) {
         this.messagesService.uploadAttachment(attFile).subscribe({
           next: (uploadRes) => {
@@ -2405,6 +2476,12 @@ export class ChatDetailComponent implements OnDestroy {
 
     // Normal message sending
     if (attFile) {
+      if (!navigator.onLine) {
+        this.messages.update((list) => list.filter((m) => m.id !== tempId && m.clientId !== tempId));
+        this.toast.info("You're offline. Attachments cannot be sent while offline.");
+        return;
+      }
+
       this.messagesService.uploadAttachment(attFile).subscribe({
         next: (uploadRes) => {
           this.executeSendMessage(
@@ -2454,6 +2531,17 @@ export class ChatDetailComponent implements OnDestroy {
   }
 
   private executeSendMessage(conversationId: string, payload: any, tempId?: string): void {
+    // If browser is currently offline, text messages stay 'pending' (clock icon) and enter the offline queue immediately
+    if (!navigator.onLine && !payload.attachmentUrl && payload.body && tempId) {
+      void this.offlineQueueService.enqueue({
+        clientId: tempId,
+        conversationId,
+        body: payload.body,
+        createdAt: new Date().toISOString(),
+      });
+      return;
+    }
+
     const finalPayload = { ...payload, ...(tempId ? { clientId: tempId } : {}) };
     this.messagesService.sendMessage(conversationId, finalPayload).subscribe({
       next: (res) => {
@@ -2483,20 +2571,23 @@ export class ChatDetailComponent implements OnDestroy {
             this.messages.update((list) => list.filter((m) => m.id !== tempId && m.clientId !== tempId));
             void this.offlineQueueService.dequeue(tempId);
           }
-          // Disable composer immediately
-          this.chat.update((c) => (c ? { ...c, canSendExtraMessage: false } : c));
+          if (err?.error?.error?.code === 'REQUEST_DECLINED' || err?.error?.code === 'REQUEST_DECLINED') {
+            this.applyPermissions({ canSend: false, reason: 'REQUEST_DECLINED', remainingMessages: 0 });
+          } else if (err?.error?.error?.code === 'REQUEST_PENDING_LIMIT' || err?.error?.code === 'REQUEST_PENDING_LIMIT') {
+            this.applyPermissions({ canSend: false, reason: 'REQUEST_PENDING_LIMIT', remainingMessages: 0 });
+          }
         } else {
-          // Network / 5xx error: mark failed (Retry button) and persist in IndexedDB offline queue
-          if (tempId) {
+          // Network / offline error: keep message 'pending' (clock icon) and persist to offline queue
+          const isOfflineOrNetwork = !navigator.onLine || err?.status === 0 || !err?.status;
+          if (isOfflineOrNetwork && tempId && !payload.attachmentUrl && payload.body) {
+            void this.offlineQueueService.enqueue({
+              clientId: tempId,
+              conversationId,
+              body: payload.body,
+              createdAt: new Date().toISOString(),
+            });
+          } else if (tempId) {
             this.markMessageFailed(tempId);
-            if (!payload.attachmentUrl && payload.body) {
-              void this.offlineQueueService.enqueue({
-                clientId: tempId,
-                conversationId,
-                body: payload.body,
-                createdAt: new Date().toISOString(),
-              });
-            }
           }
         }
         this.handleMessageError(err);
@@ -2548,6 +2639,10 @@ export class ChatDetailComponent implements OnDestroy {
 
   // Request actions (Incoming)
   acceptIncoming(): void {
+    if (!navigator.onLine) {
+      this.toast.info("You're offline. Action cannot be performed offline.");
+      return;
+    }
     this.conversationsService.acceptConversation(this.chatId()).subscribe({
       next: () => {
         this.chat.update((c) => (c ? { ...c, isIncomingRequest: false, isPendingRequest: false } : null));
@@ -2560,6 +2655,10 @@ export class ChatDetailComponent implements OnDestroy {
   }
 
   declineIncoming(): void {
+    if (!navigator.onLine) {
+      this.toast.info("You're offline. Action cannot be performed offline.");
+      return;
+    }
     this.conversationsService.declineConversation(this.chatId()).subscribe({
       next: () => {
         this.toast.info('Declined chat request');
@@ -2572,6 +2671,10 @@ export class ChatDetailComponent implements OnDestroy {
   }
 
   blockIncoming(): void {
+    if (!navigator.onLine) {
+      this.toast.info("You're offline. Action cannot be performed offline.");
+      return;
+    }
     this.conversationsService.blockUser(this.chatId()).subscribe({
       next: () => {
         this.chat.update((c) => (c ? { ...c, isBlocked: true } : null));
@@ -2584,6 +2687,10 @@ export class ChatDetailComponent implements OnDestroy {
   }
 
   unblockCurrentChat(): void {
+    if (!navigator.onLine) {
+      this.toast.info("You're offline. Action cannot be performed offline.");
+      return;
+    }
     this.conversationsService.unblockUser(this.chatId()).subscribe({
       next: () => {
         this.chat.update((c) => (c ? { ...c, isBlocked: false } : null));
@@ -2606,6 +2713,10 @@ export class ChatDetailComponent implements OnDestroy {
       confirmText: 'Clear',
       isDanger: false,
       onConfirm: () => {
+        if (!navigator.onLine) {
+          this.toast.info("You're offline. Action cannot be performed offline.");
+          return;
+        }
         this.conversationsService.clearHistory(this.chatId()).subscribe({
           next: () => {
             this.messages.set([]);
@@ -2629,6 +2740,10 @@ export class ChatDetailComponent implements OnDestroy {
       confirmText: 'Delete',
       isDanger: true,
       onConfirm: () => {
+        if (!navigator.onLine) {
+          this.toast.info("You're offline. Action cannot be performed offline.");
+          return;
+        }
         this.conversationsService.deleteConversation(this.chatId()).subscribe({
           next: () => {
             this.toast.info(`Deleted chat with ${name}`);
@@ -2652,6 +2767,10 @@ export class ChatDetailComponent implements OnDestroy {
       confirmText: 'Block',
       isDanger: true,
       onConfirm: () => {
+        if (!navigator.onLine) {
+          this.toast.info("You're offline. Action cannot be performed offline.");
+          return;
+        }
         this.conversationsService.blockUser(this.chatId()).subscribe({
           next: () => {
             this.chat.update((c) => (c ? { ...c, isBlocked: true } : null));
@@ -2731,6 +2850,10 @@ export class ChatDetailComponent implements OnDestroy {
   }
 
   submitDetailUnlock(): void {
+    if (!navigator.onLine) {
+      this.unlockPinError.set("You're offline. PIN verification requires an internet connection.");
+      return;
+    }
     const pin = this.unlockPinInput().trim();
     if (!/^\d{4}$/.test(pin)) {
       this.unlockPinError.set('Please enter a 4-digit PIN');
@@ -2775,6 +2898,10 @@ export class ChatDetailComponent implements OnDestroy {
   }
 
   submitResetPin(): void {
+    if (!navigator.onLine) {
+      this.resetPinError.set("You're offline. Resetting PIN requires an internet connection.");
+      return;
+    }
     const newPin = this.resetNewPinInput.trim();
     if (!/^\d{4}$/.test(newPin)) {
       this.resetPinError.set('New PIN must be exactly 4 digits');

@@ -3,12 +3,16 @@ import { HttpClient } from '@angular/common/http';
 import { Observable, map, tap } from 'rxjs';
 import { environment } from '../../../environments/environment';
 import { ApiResponse, ConversationItem, Message } from '../models/api.models';
+import { OfflineCacheService } from './offline-cache.service';
+import { AuthService } from './auth.service';
 
 @Injectable({
   providedIn: 'root',
 })
 export class ConversationsService {
   private readonly http = inject(HttpClient);
+  private readonly offlineCacheService = inject(OfflineCacheService);
+  private readonly authService = inject(AuthService);
   private readonly baseUrl = `${environment.apiUrl}/conversations`;
 
   // Reactive state of all conversations
@@ -17,9 +21,18 @@ export class ConversationsService {
   readonly activeConversationId = signal<string | null>(null);
 
   /**
-   * Fetch user's conversation list
+   * Fetch user's conversation list with Stale-While-Revalidate caching
    */
   loadConversations(): Observable<ConversationItem[]> {
+    const myId = this.authService.currentUser()?.id;
+    if (myId) {
+      void this.offlineCacheService.getChatList(myId).then((cached) => {
+        if (cached && this.conversations().length === 0) {
+          this.conversations.set(cached);
+        }
+      });
+    }
+
     this.isLoading.set(true);
     return this.http
       .get<ApiResponse<{ conversations: ConversationItem[] }>>(this.baseUrl)
@@ -29,6 +42,9 @@ export class ConversationsService {
           next: (items) => {
             this.conversations.set(items);
             this.isLoading.set(false);
+            if (myId) {
+              void this.offlineCacheService.saveChatList(myId, items);
+            }
           },
           error: () => {
             this.isLoading.set(false);
@@ -41,9 +57,17 @@ export class ConversationsService {
    * Get single conversation details
    */
   getConversationById(id: string): Observable<any> {
+    const myId = this.authService.currentUser()?.id;
     return this.http
       .get<ApiResponse<{ conversation: any }>>(`${this.baseUrl}/${id}`)
-      .pipe(map((res) => res.data!.conversation));
+      .pipe(
+        map((res) => res.data!.conversation),
+        tap((conv) => {
+          if (myId && conv) {
+            void this.offlineCacheService.saveConversation(myId, conv);
+          }
+        })
+      );
   }
 
   /**
@@ -156,6 +180,7 @@ export class ConversationsService {
    * Clear chat history
    */
   clearHistory(id: string): Observable<any> {
+    const myId = this.authService.currentUser()?.id;
     return this.http
       .post<ApiResponse<any>>(`${this.baseUrl}/${id}/clear`, {})
       .pipe(
@@ -164,6 +189,9 @@ export class ConversationsService {
           this.conversations.update((list) =>
             list.map((c) => (c.id === id ? { ...c, lastMessage: null, unreadCount: 0 } : c))
           );
+          if (myId) {
+            void this.offlineCacheService.deleteMessagesCache(myId, id);
+          }
         })
       );
   }
@@ -188,12 +216,16 @@ export class ConversationsService {
    * Delete / hide conversation
    */
   deleteConversation(id: string): Observable<any> {
+    const myId = this.authService.currentUser()?.id;
     return this.http
       .delete<ApiResponse<any>>(`${this.baseUrl}/${id}`)
       .pipe(
         map((res) => res.data),
         tap(() => {
           this.conversations.update((list) => list.filter((c) => c.id !== id));
+          if (myId) {
+            void this.offlineCacheService.purgeConversation(myId, id);
+          }
         })
       );
   }
@@ -235,6 +267,7 @@ export class ConversationsService {
   handleNewMessage(conversationId: string, message: Message, isCurrentActive: boolean): void {
     const list = this.conversations();
     const existingIndex = list.findIndex((c) => c.id === conversationId);
+    const myId = this.authService.currentUser()?.id;
 
     if (existingIndex !== -1) {
       const existing = list[existingIndex];
@@ -263,6 +296,11 @@ export class ConversationsService {
         ...list.filter((_, idx) => idx !== existingIndex),
       ];
       this.conversations.set(updatedList);
+
+      if (myId) {
+        void this.offlineCacheService.saveChatList(myId, updatedList);
+        void this.offlineCacheService.addMessage(myId, conversationId, message, isLocked);
+      }
     } else {
       // New conversation initiated by other user: reload list
       this.loadConversations().subscribe();

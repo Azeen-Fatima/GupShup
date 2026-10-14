@@ -981,6 +981,10 @@ export class SettingsComponent implements OnInit {
   }
 
   async togglePush(): Promise<void> {
+    if (!navigator.onLine) {
+      this.toast.info("You're offline. Action cannot be performed offline.");
+      return;
+    }
     this.isTogglingPush.set(true);
     try {
       const success = await this.pushService.toggle();
@@ -1008,6 +1012,10 @@ export class SettingsComponent implements OnInit {
   }
 
   async onAvatarSelected(event: Event): Promise<void> {
+    if (!navigator.onLine) {
+      this.toast.info("You're offline. Profile picture cannot be changed offline.");
+      return;
+    }
     const input = event.target as HTMLInputElement;
     const file = input.files?.[0];
     if (!file) return;
@@ -1028,6 +1036,10 @@ export class SettingsComponent implements OnInit {
   }
 
   removePhoto(): void {
+    if (!navigator.onLine) {
+      this.toast.info("You're offline. Profile picture cannot be removed offline.");
+      return;
+    }
     this.selectedAvatarFile.set(null);
     this.photoPreview.set(null);
     this.usersService.removeAvatar().subscribe({
@@ -1056,6 +1068,10 @@ export class SettingsComponent implements OnInit {
   }
 
   onSaveClicked(): void {
+    if (!navigator.onLine) {
+      this.toast.info("You're offline. Profile cannot be updated offline.");
+      return;
+    }
     if (this.isSaveDisabled()) return;
 
     if (this.isGoogleUser()) {
@@ -1215,6 +1231,10 @@ export class SettingsComponent implements OnInit {
   }
 
   acceptRequest(conversationId: string, name: string): void {
+    if (!navigator.onLine) {
+      this.toast.info("You're offline. Action cannot be performed offline.");
+      return;
+    }
     this.conversationsService.acceptConversation(conversationId).subscribe({
       next: () => {
         this.declinedRequests.update((list) => list.filter((r) => r.conversationId !== conversationId));
@@ -1227,6 +1247,10 @@ export class SettingsComponent implements OnInit {
   }
 
   unblockUser(item: BlockedItem): void {
+    if (!navigator.onLine) {
+      this.toast.info("You're offline. Action cannot be performed offline.");
+      return;
+    }
     this.conversationsService.unblockUser(item.id).subscribe({
       next: () => {
         this.blockedUsers.update((list) => list.filter((b) => b.id !== item.id));
@@ -1249,6 +1273,10 @@ export class SettingsComponent implements OnInit {
   }
 
   submitPasswordChange(): void {
+    if (!navigator.onLine) {
+      this.toast.info("You're offline. Password cannot be changed offline.");
+      return;
+    }
     if (this.passwordForm.invalid) {
       this.passwordForm.markAllAsTouched();
       return;

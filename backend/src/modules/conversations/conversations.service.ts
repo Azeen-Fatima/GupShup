@@ -9,6 +9,7 @@ import { emitToUser } from '../../sockets';
 import { CreateConversationInput } from './conversations.schemas';
 import { chatLockService } from '../chatLock/chatLock.service';
 import { pushService } from '../push/push.service';
+import { messagesService } from '../messages/messages.service';
 
 export class ConversationsService {
   /**
@@ -184,6 +185,8 @@ export class ConversationsService {
           const isOnline = showPresence ? (isSelf ? true : !!onlineMap[otherUser.id]) : false;
           const lastSeen = showPresence && !isSelf ? await presenceService.getLastSeen(otherUser.id) : null;
 
+          const permissions = await messagesService.getSenderPermissions(conv.id, userId);
+
           return {
             id: conv.id,
             status:
@@ -197,6 +200,8 @@ export class ConversationsService {
             declineCount: conv.declineCount,
             declinedAt: conv.declinedAt,
             canSendExtraMessage,
+            canSend: permissions.canSend,
+            permissions,
             createdAt: conv.createdAt,
             lastMessageAt: conv.lastMessageAt || conv.createdAt,
             otherUser: {
@@ -366,6 +371,8 @@ export class ConversationsService {
     const lastSeen = showPresence && !isSelf ? await presenceService.getLastSeen(otherUser.id) : null;
     const isLocked = !isSelf && (await chatLockService.isPeerLocked(userId, otherUser.id));
 
+    const permissions = await messagesService.getSenderPermissions(conv.id, userId);
+
     return {
       id: conv.id,
       status:
@@ -379,7 +386,8 @@ export class ConversationsService {
       declineCount: conv.declineCount,
       declinedAt: conv.declinedAt,
       canSendExtraMessage,
-      canSend,
+      canSend: permissions.canSend,
+      permissions,
       requesterId: conv.requesterId,
       createdAt: conv.createdAt,
       lastMessageAt: conv.lastMessageAt,
@@ -726,14 +734,19 @@ export class ConversationsService {
         }).catch(() => {});
       }
 
+      const recipientPermissions = await messagesService.getSenderPermissions(conversationId, recipientId);
       emitToUser(recipientId, 'conversation:updated', {
         conversationId,
+        permissions: recipientPermissions,
       });
     }
+
+    const permissions = await messagesService.getSenderPermissions(conversationId, senderId);
 
     return {
       conversationId,
       message,
+      permissions,
     };
   }
 
@@ -778,6 +791,8 @@ export class ConversationsService {
         wasAccepted: true,
         blockedAt: null,
         blockedById: null,
+        declineCount: 0,
+        declinedAt: null,
       },
     });
 
@@ -790,6 +805,7 @@ export class ConversationsService {
       emitToUser(otherMember.userId, 'conversation:updated', {
         conversationId,
         status: 'accepted',
+        permissions: { canSend: true, reason: null, remainingMessages: 999 },
       });
 
       // Presence unhides live
@@ -832,6 +848,7 @@ export class ConversationsService {
     emitToUser(userId, 'conversation:updated', {
       conversationId,
       status: 'accepted',
+      permissions: { canSend: true, reason: null, remainingMessages: 999 },
     });
 
     return updated;
@@ -873,14 +890,17 @@ export class ConversationsService {
     // Notify requester and recipient
     const otherMember = conv.members.find((m) => m.userId !== userId);
     if (otherMember) {
+      const requesterPermissions = await messagesService.getSenderPermissions(conversationId, otherMember.userId);
       emitToUser(otherMember.userId, 'request:declined', {
         conversationId,
         declineCount: nextDeclineCount,
+        permissions: requesterPermissions,
       });
       emitToUser(otherMember.userId, 'conversation:updated', {
         conversationId,
         status: 'declined',
         declineCount: nextDeclineCount,
+        permissions: requesterPermissions,
       });
 
       // Presence hides live
@@ -910,6 +930,8 @@ export class ConversationsService {
       }).catch(() => {});
     }
 
+    const declinerPermissions = await messagesService.getSenderPermissions(conversationId, userId);
+
     emitToUser(userId, 'request:declined', {
       conversationId,
       declineCount: nextDeclineCount,
@@ -918,6 +940,7 @@ export class ConversationsService {
       conversationId,
       status: 'declined',
       declineCount: nextDeclineCount,
+      permissions: declinerPermissions,
     });
 
     return updated;

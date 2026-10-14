@@ -1,9 +1,20 @@
 import { Injectable, inject, signal, computed } from '@angular/core';
-import { HttpClient } from '@angular/common/http';
+import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import { Router } from '@angular/router';
 import { Observable, catchError, map, of, tap, throwError } from 'rxjs';
 import { environment } from '../../../environments/environment';
 import { ApiResponse, User } from '../models/api.models';
+import { OfflineCacheService } from './offline-cache.service';
+
+function getSavedProfile(): User | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = localStorage.getItem('gupshup_user_profile');
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
 
 @Injectable({
   providedIn: 'root',
@@ -11,20 +22,56 @@ import { ApiResponse, User } from '../models/api.models';
 export class AuthService {
   private readonly http = inject(HttpClient);
   private readonly router = inject(Router);
+  private readonly offlineCacheService = inject(OfflineCacheService);
 
   // In-memory access token (never stored in localStorage)
   readonly accessToken = signal<string | null>(null);
 
-  // Current logged in user profile
-  readonly currentUser = signal<User | null>(null);
+  // Current logged in user profile (hydrated from local storage on offline startup)
+  readonly currentUser = signal<User | null>(getSavedProfile());
 
-  // Authentication status
+  // Authentication status: true if active token in memory
   readonly isAuthenticated = computed(() => !!this.accessToken());
+
+  // Whether user is stored locally so app can open offline
+  readonly hasLocalUser = computed(() => !!this.currentUser());
 
   // Initialization status for initial silent refresh check
   readonly isInitialized = signal<boolean>(false);
 
   private readonly baseUrl = `${environment.apiUrl}/auth`;
+
+  constructor() {
+    if (typeof window !== 'undefined') {
+      window.addEventListener('online', () => {
+        // Refresh token when connection returns if we have a saved user profile but no active access token
+        if (this.hasLocalUser() && !this.accessToken()) {
+          this.refreshSession().subscribe({
+            error: () => {},
+          });
+        }
+      });
+    }
+  }
+
+  saveLocalProfile(user: User): void {
+    this.currentUser.set(user);
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.setItem('gupshup_user_profile', JSON.stringify(user));
+      } catch {}
+    }
+  }
+
+  clearLocalProfile(): void {
+    this.accessToken.set(null);
+    this.currentUser.set(null);
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.removeItem('gupshup_user_profile');
+      } catch {}
+    }
+  }
 
   /**
    * Request signup verification code
@@ -70,7 +117,7 @@ export class AuthService {
         map((res) => res.data!),
         tap((res) => {
           this.accessToken.set(res.accessToken);
-          this.currentUser.set(res.user);
+          this.saveLocalProfile(res.user);
         })
       );
   }
@@ -88,7 +135,7 @@ export class AuthService {
         map((res) => res.data!),
         tap((res) => {
           this.accessToken.set(res.accessToken);
-          this.currentUser.set(res.user);
+          this.saveLocalProfile(res.user);
         })
       );
   }
@@ -109,9 +156,12 @@ export class AuthService {
             });
           }
         }),
-        catchError(() => {
-          this.accessToken.set(null);
-          this.currentUser.set(null);
+        catchError((err: unknown) => {
+          // Never log out on network failure or offline refresh failure!
+          // Log out ONLY on a real 401 from server.
+          if (err instanceof HttpErrorResponse && err.status === 401) {
+            this.clearLocalProfile();
+          }
           return of(null);
         })
       );
@@ -125,7 +175,7 @@ export class AuthService {
       .get<ApiResponse<{ user: User }>>(`${environment.apiUrl}/users/me`)
       .pipe(
         map((res) => res.data!.user),
-        tap((user) => this.currentUser.set(user))
+        tap((user) => this.saveLocalProfile(user))
       );
   }
 
@@ -136,8 +186,8 @@ export class AuthService {
     return this.http.post(`${this.baseUrl}/logout`, {}).pipe(
       catchError(() => of(null)),
       tap(() => {
-        this.accessToken.set(null);
-        this.currentUser.set(null);
+        this.clearLocalProfile();
+        void this.offlineCacheService.clearAll();
         this.router.navigate(['/login']);
       })
     );

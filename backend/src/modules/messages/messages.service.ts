@@ -76,6 +76,10 @@ export class MessagesService {
       return { canSend: false, reason: 'USER_BLOCKED', remainingMessages: 0 };
     }
 
+    if (conv.status === 'accepted') {
+      return { canSend: true, reason: null, remainingMessages: 999 };
+    }
+
     if (conv.status === 'declined') {
       if (conv.requesterId === userId) {
         if (conv.declineCount >= 2) {
@@ -91,7 +95,7 @@ export class MessagesService {
         if (extraSent >= 1) {
           return { canSend: false, reason: 'REQUEST_DECLINED', remainingMessages: 0 };
         }
-        return { canSend: true, reason: null, remainingMessages: 1 };
+        return { canSend: true, reason: 'REQUEST_DECLINED_EXTRA', remainingMessages: 1 };
       }
       return { canSend: true, reason: null, remainingMessages: 999 };
     }
@@ -109,11 +113,7 @@ export class MessagesService {
         }
         return { canSend: true, reason: null, remainingMessages: 1 };
       }
-      return { canSend: true, reason: null, remainingMessages: 999 };
-    }
-
-    if (conv.status === 'accepted') {
-      return { canSend: true, reason: null, remainingMessages: 999 };
+      return { canSend: false, reason: 'PENDING_ACCEPT_REQUIRED', remainingMessages: 0 };
     }
 
     return { canSend: false, reason: 'CONVERSATION_BLOCKED', remainingMessages: 0 };
@@ -511,8 +511,10 @@ export class MessagesService {
     }
 
     const permissions = await this.getSenderPermissions(conversationId, userId);
+    const otherPermissions =
+      otherUserId !== userId ? await this.getSenderPermissions(conversationId, otherUserId) : permissions;
 
-    emitToUser(otherUserId, 'conversation:updated', { conversationId });
+    emitToUser(otherUserId, 'conversation:updated', { conversationId, permissions: otherPermissions });
     emitToUser(userId, 'conversation:updated', { conversationId, permissions });
 
     if (otherUserId !== userId) {

@@ -55,6 +55,12 @@ export interface ConversationItem {
   declineCount?: number;
   declinedAt?: string | null;
   canSendExtraMessage?: boolean;
+  canSend?: boolean;
+  permissions?: {
+    canSend: boolean;
+    reason: string | null;
+    remainingMessages: number;
+  };
   createdAt: string;
   lastMessageAt: string;
   otherUser: {
@@ -224,6 +230,11 @@ export function formatConversationToChatItem(
     rawStatus: conv.status,
     otherUserId: conv.otherUser.id,
     lastSeen: conv.otherUser.lastSeen || null,
+    permissions: conv.permissions || {
+      canSend: conv.status === 'accepted' || isMe || conv.state === 'normal',
+      reason: null,
+      remainingMessages: conv.status === 'accepted' || isMe ? 999 : 1,
+    },
   };
 }
 

@@ -57,6 +57,12 @@ export interface ChatItem {
   declineCount?: number;
   declinedAt?: string | null;
   canSendExtraMessage?: boolean;
+  canSend?: boolean;
+  permissions?: {
+    canSend: boolean;
+    reason: string | null;
+    remainingMessages: number;
+  };
   rawState?: string;
   rawStatus?: string;
   otherUserId?: string;

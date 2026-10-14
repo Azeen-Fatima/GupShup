@@ -77,15 +77,24 @@ export const authInterceptor: HttpInterceptorFn = (req, next) => {
                 );
               }
 
-              // Refresh failed
-              authService.logout();
-              router.navigate(['/login']);
+              // If refresh failed because user is offline or network error, do NOT log out!
+              if (authService.hasLocalUser() && typeof navigator !== 'undefined' && !navigator.onLine) {
+                return throwError(() => error);
+              }
+
+              // Genuine refresh failure
+              if (!authService.hasLocalUser()) {
+                authService.logout();
+                router.navigate(['/login']);
+              }
               return throwError(() => error);
             }),
             catchError((refreshErr) => {
               isRefreshing = false;
-              authService.logout();
-              router.navigate(['/login']);
+              if (refreshErr instanceof HttpErrorResponse && refreshErr.status === 401) {
+                authService.logout();
+                router.navigate(['/login']);
+              }
               return throwError(() => refreshErr);
             })
           );

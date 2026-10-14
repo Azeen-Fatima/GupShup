@@ -907,6 +907,10 @@ export class ChatListComponent implements OnInit {
   }
 
   openSheet(): void {
+    if (!navigator.onLine) {
+      this.toast.info("You're offline. Find People is not available offline.");
+      return;
+    }
     this.sheetOpen.set(true);
     this.searchPeople('');
   }
@@ -956,6 +960,10 @@ export class ChatListComponent implements OnInit {
   submitUnlockPin(): void {
     const chat = this.lockModalChat();
     if (!chat) return;
+    if (!navigator.onLine) {
+      this.pinError.set("You're offline. PIN verification requires an internet connection.");
+      return;
+    }
     const pin = this.pinInput.trim();
     if (!/^\d{4}$/.test(pin)) {
       this.pinError.set('PIN must be 4 digits');
@@ -997,6 +1005,11 @@ export class ChatListComponent implements OnInit {
 
     if (action === 'view_profile') {
       this.openContactInfo(chat);
+      return;
+    }
+
+    if (!navigator.onLine) {
+      this.toast.info("You're offline. Action cannot be performed offline.");
       return;
     }
 
